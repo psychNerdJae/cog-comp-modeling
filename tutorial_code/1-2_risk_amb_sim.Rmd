@@ -1,0 +1,533 @@
+---
+title: "Risk and Ambiguity: Model Simulation"
+subtitle: "Session 1-2"
+author: "Jae-Young Son"
+date: "February 21, 2022"
+output:
+  html_document:
+    code_download: true
+    code_folding: show
+    toc: true
+    toc_float:
+      collapsed: false
+---
+
+# Setup
+
+We'll load in the usual packages we use...
+
+```{r load-libraries}
+library(tidyverse)
+suppressMessages(library(here))
+```
+
+Along with our custom utility functions.
+
+```{r dummy-utils}
+#| eval = FALSE
+
+source(here("code", "utils.R"))
+```
+
+```{r real-utils}
+#| echo = FALSE
+
+source(here("tutorial_code", "utils.R"))
+```
+
+# Introduction
+
+## Risk
+
+Consider this scenario: you're in a gambling experiment. If you pick option A, you can walk away with \$5 for sure. If you pick option B, you can win \$25. Here's the catch: you only have a 25% chance of winning the gamble, and if you lose, you walk away with nothing.
+
+What option would you pick? Empirically, most people choose option A, and it's likely that you did too.
+
+Now, calculate the expected value of picking option B. Does it seem like humans make decisions according to expected value?
+
+As this example demonstrates, people are generally risk-averse. Seemingly, people feel like it's better to have a little for sure, than to risk having nothing. There's been a long theoretical debate about whether such behavior is "optimal" or "rational", but we're going to sidestep it entirely. Remember that our job is simply to build models that do a good job of describing/explaining behavior.
+
+Okay, so how could we go about building a better model for how people make risky decisions? Recall our equation for expected value: $EV = v \times p$. How would we modify this equation to account for risk aversion? We want to leave the probability term $p$ alone, since these gambles explicitly tell people the probability of winning. That leaves the value term $v$. Our psychological model is that people who are more risk averse value uncertain options less.
+
+One commonly-used model is taken from [Levy et al., 2009](https://journals.physiology.org/doi/full/10.1152/jn.00853.2009), and is a fairly straightforward modification of the expected value equation: $U = v^\alpha \times p$. Here, $U$ stands for utility (as in, how much subjective utility do we gain from making a particular choice, given our risk preferences?), and $\alpha$ is a risk aversion parameter. Consider the example gamble from earlier: if \$25 is at stake, and someone has risk aversion $\alpha = 1$, how much is option B worth? Now consider a different individual who has risk aversion $\alpha = 0.5$. How much is option B worth to that individual? Finally, let's consider someone who has a risk *preference* $\alpha = 1.1$. Why did I switch my terminology from "risk aversion" to "risk preference"?
+
+For reference, Levy et al. characterize people as being "risk-neutral", "risk-averse", or "risk-seeking" based on their estimated $\alpha$.
+
+## Ambiguity
+
+In their experiments, Levy et al. present their subjects with gambles that look a bit like this. The column facets show the *amount* of uncertainty, and the row facets show the *type* of uncertainty. The top row gives us a look at risk. For example, if there's 25% risk, then there's a 75% chance of winning a gamble. More intuitively, the bars show us the proportion of red and blue poker chips in a paper bag. If you pick a red chip, then you win the gamble. If you pick a blue chip, then you walk away with nothing.
+
+The bottom row is a little interesting, because we can't actually see the full distribution of chips. This is known as ***ambiguity***, because there's uncertainty about the amount of risk involved in the gamble. So when there's 75% ambiguity, we know that the red chips make up at least 12.5% of the paper bag, and at most 87.5%. If you're ambiguity-pessimistic, then you might imagine that the true proportion of red chips is closer to 12.5%. If you're ambiguity-optimistic, then you might imagine that the true proportion of red chips is instead closer to 87.5%.
+
+```{r task-diagram}
+expand_grid(
+  uncertainty = seq(0.25, 0.75, 0.25),
+  condition = c("risk", "ambiguity")
+) %>%
+  mutate(
+    unknown = if_else(condition == "risk", 0, uncertainty),
+    win = if_else(condition == "risk", 1-uncertainty, (1-uncertainty)/2),
+    lose = if_else(condition == "risk", uncertainty, (1-uncertainty)/2)
+  ) %>%
+  pivot_longer(
+    cols = unknown:lose,
+    names_to = "outcome",
+    values_to = "probability"
+  ) %>%
+  mutate(
+    condition = fct_relevel(condition, "risk"),
+    outcome = fct_relevel(outcome, "win", "unknown", "lose"),
+  ) %>%
+  ggplot(aes(x=1, y=probability, fill=outcome)) +
+  facet_grid(
+    rows = vars(condition),
+    cols = vars(uncertainty)
+  ) +
+  geom_col() +
+  scale_fill_manual(
+    values = c("#ca0020", "grey50", "#0571b0")
+  ) +
+  theme(
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
+```
+
+How might we modify our utility equation to incorporate ambiguity preferences? After incorporating risk, we were left with the equation $U = v^\alpha \times p$. Now, we must modify $p$ to reflect that we don't know what the true probability is of winning.
+
+Levy et al. use the following equation to do so:
+
+$$U = v^\alpha \times (p + \frac{\beta A}{2}) \tag{1.2.1}$$
+
+Here, the amount of ambiguity $A$ is how big the grey bar is, and $\beta$ is a parameter capturing ambiguity aversion.
+
+Let's break down the logic of this equation. If there is no ambiguity, then $A=0$, and then this reduces down to our risk-aversion equation. If an individual is completely risk-neutral, then $\beta = 0$, and then this also reduces down to our risk-aversion equation (NB: for ambiguous gambles, the most neutral estimate of the probability of winning is $p=0.5$, and so a risk-neutral person treats all ambiguous gambles as a 50-50% gamble). To the extent that $\beta > 0$, then an individual is more ambiguity-optimistic; and to the extent that $\beta < 0$, then an individual is more ambiguity-pessimistic. Why do we divide $\beta A$ by $2$? Simply put, because all ambiguity is symmetrically distributed around the middle.
+
+# Simulating utility
+
+As we've seen, the first step in computational modeling is to define a sensible mathematical model, which precisely specifies whatever psychological processes we might be interested in. The second step, which follows closely from the first, is to write a function that is able to simulate behavior based on our model. We'll do this in two steps: first to compute utility values, and second to use the utilities to simulate choice.
+
+We can very slightly modify the utility equation to make it read more like a function.
+
+$$U(\alpha, \beta; v, p, A) = v^\alpha \times (p + \frac{\beta A}{2}) \tag{1.2.2}$$
+
+Now, the definition of utility explicitly is understood to depend on some inputs. You'll note that the parameters $\alpha$ and $\beta$ are separated by a semicolon from the parameters $v, p, A$. This is basically fancy notation that alerts you to the fact that $\alpha$ and $\beta$ are "latent" variables that must be estimated from behavior, whereas in a given trial, $v, p, A$ are variables directly provided by the experiment.
+
+## Exercise: DIY utility function
+
+Now it's your turn: try implementing this equation as a custom function called `compute_utility_risk_amb`. As you do so, think about ways in which a user might mistakenly misuse your function.
+
+1. A common mistake might be a user specifying that (e.g.) the probability of winning is 75, rather than 0.75. Have your function check for things of this nature, and `stop` execution if the user input is incorrect.
+
+2. If the user specifies a non-zero amount of ambiguity, have your function check to make sure that the probability of winning is set to 50%. If this condition is not met, return a `warning` and change it to 50%.
+
+Try checking the output of your function against mine:
+
+```{r def-comp-utility}
+#| echo = FALSE
+
+compute_utility_risk_amb <- function(
+  agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+) {
+  # Check for mistakenly-typed risk/ambiguity
+  if (!between(gamble_win_prob, 0, 1) | !between(gamble_amb, 0, 1)) {
+    stop("The gamble risk/ambiguity must fall in [0, 1].")
+  }
+  
+  # Check whether risk level is appropriate, given ambiguity level
+  if (gamble_amb != 0 & gamble_win_prob != 0.5) {
+    warning("Non-zero ambiguity level specified. Risk level changed to 50%.")
+    gamble_win_prob <- 0.5
+  }
+  return (
+    (gamble_value^agent_alpha) * (gamble_win_prob + (agent_beta * gamble_amb / 2))
+  )
+}
+```
+
+```{r demo-comp-utility}
+#| error = TRUE
+
+# Should not return any warnings
+compute_utility_risk_amb(
+  agent_alpha = 0.5,
+  agent_beta = -1,
+  gamble_value = 25,
+  gamble_win_prob = 0.5,
+  gamble_amb = 0.25
+)
+
+# Should not return any warnings
+compute_utility_risk_amb(
+  agent_alpha = 0.25,
+  agent_beta = -1,
+  gamble_value = 25,
+  gamble_win_prob = 0.5,
+  gamble_amb = 0
+)
+
+# Returns warning about misspecified risk level
+compute_utility_risk_amb(
+  agent_alpha = 0,
+  agent_beta = -1,
+  gamble_value = 25,
+  gamble_win_prob = 0.75,
+  gamble_amb = 0.25
+)
+
+# Returns error
+compute_utility_risk_amb(
+  agent_alpha = 1,
+  agent_beta = -1,
+  gamble_value = 25,
+  gamble_win_prob = 75,
+  gamble_amb = 25
+)
+```
+
+Now that we have a nice function for computing utility under risk and ambiguity, go ahead and add it to your `utils.R` file so that you can access it later.
+
+## Exercise: Utility under risk
+
+To get a better handle on how $\alpha$ and $\beta$ affect utility, let's see what happens as we modify those values. This will feel pretty similar to the exercises from last time, where we generated heatmaps of expected value.
+
+First, let's simulate how $\alpha$ affects utility during risky gambles. Use the following parameter space:
+
+- Keep the gamble value fixed at \$100
+- Risk levels 25%, 50%, and 75%
+- Ambiguity levels should be fixed at 0%
+- $\alpha \in [-0.5, 1.2]$ in steps of 0.01.
+- The value of $\beta$ can be fixed at any arbitrary value. Self-test: why?
+
+Hint: You will likely get some cryptic errors to this effect: `the condition has length > 1 and only the first element will be used`. Why are you getting this error? Try looking up the documentation for `dplyr::rowwise`. Why does using this function silence the error message?
+
+```{r risk-util-sol}
+#| eval = FALSE
+
+expand_grid(
+  gamble_value = 100,
+  gamble_win_prob = seq(0.25, 0.75, 0.25),
+  gamble_amb = 0,
+  agent_alpha = seq(-0.5, 1.2, 0.01),
+  agent_beta = 1
+) %>%
+  rowwise() %>%
+  mutate(
+    utility = compute_utility_risk_amb(
+      agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    gamble_win_prob = factor(gamble_win_prob)
+  ) %>%
+  ggplot(aes(x=agent_alpha, y=gamble_win_prob, fill=utility)) +
+  geom_tile() +
+  scale_fill_viridis_c()
+```
+
+Below is an example plot that only displays part of the overall parameter space, just to give you a sense for what your (full) output should look like.
+
+```{r risk-util-demo}
+#| echo = FALSE
+
+expand_grid(
+  gamble_value = 100,
+  gamble_win_prob = seq(0.25, 0.5, 0.25),
+  gamble_amb = 0,
+  agent_alpha = seq(0, 1, 0.01),
+  agent_beta = 1
+) %>%
+  rowwise() %>%
+  mutate(
+    utility = compute_utility_risk_amb(
+      agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    gamble_win_prob = factor(gamble_win_prob)
+  ) %>%
+  ggplot(aes(x=agent_alpha, y=gamble_win_prob, fill=utility)) +
+  geom_tile() +
+  scale_fill_viridis_c()
+```
+
+Once you generate your full output, try answering the following questions:
+
+1. Recall that a risk-neutral agent has $\alpha = 1$, and therefore computes utility according to expected value. Is this true in your simulation?
+
+2. Mathematically, the value of $\alpha$ can be any real number. However, things that are mathematically possible aren't always psychologically plausible. What does this simulation indicate about what parameter values will be most "interesting" for explaining how an agent computes utility?
+
+3. What happens to utility when $\alpha > 1$? Why does this happen, mathematically? What would this parameter value say about someone's psychology, if taken at face value? Should we take it at face value?
+
+## Exercise: Utility under ambiguity
+
+Now, let's simulate how $\beta$ affects utility during ambiguous gambles using the following parameter space:
+
+- Fix the gamble value at \$100
+- Risk levels should now be fixed at 50%
+- Ambiguity levels 25%, 50%, and 75%
+- $\alpha \in [0.5, 1]$ in steps of 0.01
+- $\beta \in [-2, 2]$ in steps of 0.01
+
+```{r amb-util-sol}
+#| eval = FALSE
+
+expand_grid(
+  gamble_value = 100,
+  gamble_win_prob = 0.5,
+  gamble_amb = seq(0.25, 0.75, 0.25),
+  agent_alpha = seq(0.5, 1, 0.01),
+  agent_beta = seq(-2, 2, 0.01)
+) %>%
+  rowwise() %>%
+  mutate(
+    utility = compute_utility_risk_amb(
+      agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    gamble_amb = str_c("amb = ", gamble_amb)
+  ) %>%
+  ggplot(aes(x=agent_alpha, y=agent_beta, fill=utility)) +
+  facet_wrap(~gamble_amb) +
+  geom_tile() +
+  scale_fill_viridis_c()
+```
+
+Again, you can find an example plot below that includes just part of this parameter space, to give you a sense for how you might plot these data.
+
+```{r amb-util-demo}
+#| echo = FALSE
+
+expand_grid(
+  gamble_value = 100,
+  gamble_win_prob = 0.5,
+  gamble_amb = seq(0.25, 0.5, 0.25),
+  agent_alpha = seq(0.5, 1, 0.01),
+  agent_beta = seq(-0.5, 0.5, 0.01)
+) %>%
+  rowwise() %>%
+  mutate(
+    utility = compute_utility_risk_amb(
+      agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    gamble_amb = str_c("amb = ", gamble_amb)
+  ) %>%
+  ggplot(aes(x=agent_alpha, y=agent_beta, fill=utility)) +
+  facet_wrap(~gamble_amb) +
+  geom_tile() +
+  scale_fill_viridis_c()
+```
+
+Once you plot the full parameter space, answer the following questions:
+
+1. What would it look like for an agent to be totally risk- and ambiguity-neutral? Does your simulation verify your reasoning?
+
+2. Like before, the value of $\beta$ can be any real number. But just as before, this doesn't always make psychological sense. What range of parameter values (now *both* $\alpha$ and $\beta$) do we get the most psychological traction?
+
+# Simulating behavior
+
+Alright, now we're ready to simulate choice behavior. On every trial, a participant is presented with a choice between a sure $5, versus an uncertain gamble with varying risk and ambiguity. Let's see how different combinations of task parameters affect decisions.
+
+At this point, we'll need to draw upon the softmax function we wrote last time. You'll note that we're juggling a *lot* of parameters already, and now we're adding a softmax temperature parameter on top of everything else. We'll have to be wise in how we simulate and plot data, to avoid getting overwhelmed.
+
+## Exercise: Behavior under risk
+
+Ultimately, we want to know the probability of an agent choosing the gamble, given the following: 1) the amount of money at stake, 2) how risky the gamble is, and 3) their risk attitude.
+
+Compute the utility as before. Then, pass those utility values to the softmax, with \$5 as the alternative option. Recall that the softmax temperature is denoted by the Greek letter tau ($\tau$).
+
+Use the following parameter space:
+
+- Gamble values ranging from \$0-\$100 in increments of \$1
+- Risk levels 25%, 50%, and 75%
+- $\alpha \in [0.5, 1]$ in increments of 0.1
+- $\tau = 1$
+
+```{r risk-behav-sol}
+expand_grid(
+  gamble_value = 0:100,
+  gamble_win_prob = seq(0.25, 0.75, 0.25),
+  gamble_amb = 0,
+  agent_alpha = seq(0.5, 1, 0.1),
+  agent_beta = 1
+) %>%
+  rowwise() %>%
+  mutate(
+    utility = compute_utility_risk_amb(
+      agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+    ),
+    p_gamble = softmax(
+      option_values = c(utility, 5),
+      option_chosen = 1,
+      temperature = 1
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    agent_alpha = str_c("alpha = ", agent_alpha),
+    gamble_win_prob = factor(gamble_win_prob)
+  ) %>%
+  ggplot(aes(x=gamble_value, y=p_gamble, color=gamble_win_prob)) +
+  facet_wrap(~agent_alpha) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(option = "plasma", end = 0.8)
+```
+
+Below is a plot that contains a subset of the parameter space.
+
+```{r risk-behav-demo}
+expand_grid(
+  gamble_value = 0:50,
+  gamble_win_prob = seq(0.25, 0.75, 0.25),
+  gamble_amb = 0,
+  agent_alpha = seq(0.5, 0.7, 0.1),
+  agent_beta = 1
+) %>%
+  rowwise() %>%
+  mutate(
+    utility = compute_utility_risk_amb(
+      agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+    ),
+    p_gamble = softmax(
+      option_values = c(utility, 5),
+      option_chosen = 1,
+      temperature = 1
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    agent_alpha = str_c("alpha = ", agent_alpha),
+    gamble_win_prob = factor(gamble_win_prob)
+  ) %>%
+  ggplot(aes(x=gamble_value, y=p_gamble, color=gamble_win_prob)) +
+  facet_wrap(~agent_alpha) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(option = "plasma", end = 0.8)
+```
+
+Create a plot of the full parameter space, then answer the following questions:
+
+1. Consider an agent with $\alpha = 0.5$, who is deciding between a sure \$5 and a gamble with 75% risk (i.e., 25% chance of winning). At approximately what dollar amount does this agent consider these options to be equivalent?
+
+2. What happens to an agent's choices as its risk tolerance increases? Consider the ***midpoint*** location (i.e., the gamble value at which the two options are equivalent), and also the ***slope*** (i.e., the steepness of the curve).
+
+3. Consider the probability of winning a gamble. Obviously, 50% is numerically right in the middle between 25% and 75%. To what extent is this reflected in your simulation? Why?
+
+4. Try changing the softmax temperature to values that are above and below 1. What happens?
+
+## Exercise: Behavior under ambiguity
+
+Now we want to know the probability of an agent choosing an ambiguous gamble.
+
+Use the following parameter space:
+
+- Gamble values ranging from \$0-\$100 in increments of \$1
+- Ambiguity levels 25%, 50%, and 75%
+- $\alpha \in [0.5, 1]$ in increments of 0.1
+- $\beta \in [-1, 1]$ in increments of 0.5
+- $\tau = 1$
+
+```{r amb-behav-sol}
+#| eval = FALSE
+
+expand_grid(
+  gamble_value = 0:100,
+  gamble_win_prob = 0.5,
+  gamble_amb = seq(0.25, 0.75, 0.25),
+  agent_alpha = seq(0.5, 1, 0.1),
+  agent_beta = seq(-1, 1, 0.5)
+) %>%
+  rowwise() %>%
+  mutate(
+    utility = compute_utility_risk_amb(
+      agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+    ),
+    p_gamble = softmax(
+      option_values = c(utility, 5),
+      option_chosen = 1,
+      temperature = 2
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    agent_alpha = str_c("alpha = ", agent_alpha),
+    agent_beta = str_c("beta = ", agent_beta),
+    agent_beta = fct_relevel(
+      agent_beta, "beta = -1", "beta = -0.5"
+    ),
+    gamble_amb = factor(gamble_amb)
+  ) %>%
+  ggplot(aes(x=gamble_value, y=p_gamble, color=gamble_amb)) +
+  facet_grid(
+    rows = vars(agent_alpha),
+    cols = vars(agent_beta)
+  ) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(option = "plasma", end = 0.8)
+```
+
+As usual, I've included a subset of this parameter space below.
+
+```{r amb-behav-demo}
+#| echo = FALSE
+
+expand_grid(
+  gamble_value = 0:50,
+  gamble_win_prob = 0.5,
+  gamble_amb = seq(0.25, 0.75, 0.25),
+  agent_alpha = seq(0.5, 0.7, 0.1),
+  agent_beta = seq(0.5, 1, 0.5)
+) %>%
+  rowwise() %>%
+  mutate(
+    utility = compute_utility_risk_amb(
+      agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+    ),
+    p_gamble = softmax(
+      option_values = c(utility, 5),
+      option_chosen = 1,
+      temperature = 1
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    agent_alpha = str_c("alpha = ", agent_alpha),
+    agent_beta = str_c("beta = ", agent_beta),
+    gamble_amb = factor(gamble_amb)
+  ) %>%
+  ggplot(aes(x=gamble_value, y=p_gamble, color=gamble_amb)) +
+  facet_grid(
+    rows = vars(agent_alpha),
+    cols = vars(agent_beta)
+  ) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(option = "plasma", end = 0.8)
+```
+
+After creating a plot of the full parameter space, answer the following questions:
+
+1. It can be overwhelming trying to consider all of the data at once. For now, focus on a single row (i.e., keep $\alpha$ fixed). At what value of $\beta$ is an agent ambiguity-neutral? What happens to choice as an agent becomes more ambiguity-averse, and as an agent becomes more ambiguity-seeking?
+
+2. Now, focus on a single column (i.e., keep $\beta$ fixed). Given our risk simulations in the previous exercise, what do you expect will happen to the choice curve as $\alpha$ increases? Is your prediction correct?
+
+3. Based on the previous exercise, what do you expect will happen as you adjust the softmax temperature? Try it now. Were your predictions correct?
+
+4. Note that modeling risk behaviors only required a single parameter to capture uncertainty preference, whereas modeling ambiguity behaviors requires two. This is sensible enough given the experimental task. However, as psychologists, we are of course interested in knowing whether our measures generalize beyond the immediate context of a particular task. What do you think of this particular model as a general model for measuring uncertainty preferences?
+
+# Next time...
+
+You might have noticed that we have yet to touch any real data. In computational modeling, there's a distinction drawn between simulating a model (which can be done entirely in artificial agents) and fitting the parameters of a model to data (which requires finding the parameter values of a given model that best explain a human's actual behavior).
+
+Parameter fitting is not entirely difficult to do, per se, but does require a few extra layers of complexity. Importantly, parameter-fitting requires a solid understanding of how to simulate data, and ideally an experience-based understanding of how model-predicted choices are affected by different combinations of parameter values. Notably, these are exactly the skills that we've practiced in this tutorial.
+
+Next time, we'll actually fit parameters to real(!) data. We'll be sticking with utility modeling under risk and ambiguity, since we've now built up some intuition about how these models work.
+
+After we're done with utility modeling, for each "class" of model, we'll no longer be separating out the simulation and fitting steps into separate tutorials; we'll be doing all of it in a single tutorial.

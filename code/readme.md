@@ -1,0 +1,3 @@
+This is a folder for putting all of your code as you follow along with the tutorials. Make sure to commit regularly, to get practice using GitHub!
+
+Tutorials formatted as HTML documents can be found in `cog-comp-modeling/tutorials`, and if you want to look at the source code, you can either download it from the HTML documents (in the top right corner, click "Code" and then "Download Rmd"), or in the folder `cog-comp-modeling/tutorial-code`.

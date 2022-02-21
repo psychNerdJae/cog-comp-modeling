@@ -1,0 +1,147 @@
+---
+title: "Expected value"
+subtitle: "Session 1-1"
+author: "Jae-Young Son"
+date: "February 21, 2022"
+output:
+  html_document:
+    code_download: true
+    code_folding: show
+    toc: true
+    toc_float:
+      collapsed: false
+---
+
+# Setup
+
+We'll load in the usual packages we use...
+
+```{r load-libraries}
+library(tidyverse)
+suppressMessages(library(here))
+```
+
+```{r real-utils}
+#| echo = FALSE
+
+source(here("tutorial_code", "utils.R"))
+```
+
+
+# Expected value
+
+According to classic economic theory, people should make decisions based on the options' ***expected value***. For example, when I'm in the mood for Mexican food, I derive a lot of happiness out of ordering nachos or burritos from Baja's Taqueria. However, I'm more often in the mood for nachos than burritos. Therefore, I might have some expectation about the value I'd derive from ordering either nachos or burritos, and I should this expectation to guide my choices.
+
+What would it look like to quantify this set of qualitative preferences? We could try to define a mathematical equation that combines the magnitude of ***value*** $v$ I get from an event, with the ***probability*** $p$ that the event occurs. That combination is "expected value" in the sense that it's the value that I expect to get from an event happening. That equation is very simple: $EV = vp$. This is one equation that you'll want to commit to memory. We'll be seeing variants of this equation popping up here, there, and everywhere, and it's one of the most useful equations you can train yourself to recognize in mathematical modeling.
+
+Okay, let's work through a concrete example. We could say that I derive 10 happy units from eating burritos, in the event that I'm in the right mood for it. However, I'm only in the mood for burritos 30% of the time. If you bought me a burrito without knowing what mood I'm in, you would expect that on average, the value of the burrito would be $10 \times 0.3 = 3$ happy units.
+
+I might, on the other hand, derive 5 happy units from eating nachos, when I'm in the mood. Naively, that suggests that I might like burritos more than nachos. However, I'm in the mood for nachos 80% of the time. This makes the expected value of nachos $5 \times 0.8 = 4$ happy units.
+
+
+# Choice rules
+
+## Hardmax
+
+Once we calculate the expected value of different options, how do we make choose between these options? One straightforward strategy is simply to choose whatever option has the highest expected value. Concretely: since the expected value of nachos is greater than the expected value of burritos, always choose to eat nachos. This strategy is known as a ***hardmax*** choice rule, and guarantees that we'll maximize our happiness in the long run if our expected value estimates are both stable and accurate.
+
+A hardmax choice rule might be generally sensible in the case where nachos provide 4 happy units, and burritos provide 3 happy units. But what if the math worked out such that nachos provide 4 happy units, and burritos provide 3.99 happy units? Would it psychologically make sense that I should exclusively order nachos in this situation? If I've developed a hardline policy that I always order nachos, how much sense does it make to transfer this choice rule across contexts, like going to Tallulah's for lunch instead of Baja's? (Author note: it's my opinion that Tallulah's burritos are far tastier than their nachos, so this isn't a pure hypothetical for me...)
+
+## Softmax
+
+Setting aside these theoretical concerns, it's also just pragmatically true that humans make "noisy" decisions, and if we're interested in building good models of behavior, we've got to find principled ways of accounting for this noise. A better solution might be to choose between options *in proportion to* their expected value. This kind of choice rule is known as a ***softmax***, as we're taking a "softer" approach where we will sometimes sample "inferior" options (i.e., inferior in the sense that they have lower expected value than the option with the highest expected value).
+
+How can we formalize this kind of qualitative decision rule using a quantitative equation? We'd like to express this problem in terms of the probability of me choosing to order nachos or burritos when I'm at Baja's. Naively, we might think to do something like this:
+
+$$p(pick \space nachos) = \frac{EV \space nachos}{EV \space nachos + EV \space burritos}$$
+
+That works out to $\frac{4}{4 + 3} \approx 0.57$. But there are cases in which this naive equation does *not* work, and where a more general equation is needed. Before reading on, can you try thinking of situations where this naive equation might fail?
+
+To make this concrete, let's pretend that I hate quesadillas (author note: I do not). In fact, if you force fed me a quesadilla, it would produce *negative* expected value for me. So if we tried to model the probability of me picking quesadillas at Baja's, we'd be in the awkward scenario of predicting a negative probability, which is mathematically impossible.
+
+So to have a general solution, we need a method for making sure that we're only predicting probabilities in the range $p \in [0, 1]$. In set notation, the symbol $\in$ means something like "X is an element of Y", or even more simply, "X is in Y". The bracket notation just specifies that the range includes a lower bound of $0$ and an upper bound of $1$.
+
+We can make a simple modification to our naive equation to make sure that this happens: feed all of our values to an exponential function. Why on earth would we want to do this? Well, our naive equation already has an upper bound of $1$, because the sum of all expected values for all options (i.e., in the denominator) is larger than the expected value of any single option. In the extreme case, all options except one have zero value, and so the numerator and denominator are the same. So, what's missing is a method for specifying a lower bound of $0$. It turns out that exponents are really convenient for this, as you'll see in a second.
+
+## Exercises: Exponential functions
+
+1. Using the R function `exp`, try calculating $e^x$, where $x = [-5, 5]$. What do you notice, particularly when $x$ is negative or $0$? Note that the choice of $e$ as the base is more-or-less arbitrary, but that's the accepted convention in all of the softmax models I've ever encountered.
+
+2. Use `ggplot` to graph this curve.
+
+## General softmax equation
+
+Okay, so let's look at the more general version of our softmax equation.
+
+$$p(pick \space nachos) = \frac{e^{EV nachos}} {e^{EV nachos} + e^{EV burrito}} = \frac{e^{4}} {e^{4} + e^{3}} \approx 0.73$$
+
+We can write this a little more compactly, so that we could generalize this equation to be the choice rule for any decision making problem.
+
+$$p(choose \space x_i) = \Large{\frac{e^{x_i}}{\sum_{j=1}^{K} e^{x_j}}} \tag{1.1.1}$$
+
+To translate that back into our food example, $x_i$ refers to choosing the option $i=nachos$, and the summation $\sum$ in the denominator starts with option $j=1=nachos$, and sums over all other options $j=2=burrito$, $j=3=quesadilla$, until you reach the total number of options $K$.
+
+
+# Exercises
+
+1. Confirm for yourself that the probability of me choosing nachos over burritos is ~73%, given that $EV_{nachos} = 4$ and $EV_{burrito} = 3$.
+
+2. Write a custom function implementing the softmax function. It should output a single probability of choosing a given option. As input, you should specify a vector of values (e.g., expected values), and also the index of the option being chosen. If you need a sanity check, make sure that your custom function gives you the same answer as exercise 1.
+
+3. Assume that $EV_{quesadillas} = -2$ for me. How does this change the probability of me choosing nachos? Then, let's throw some tacos into the mix for good measure, which have $EV_{tacos} = 1$.
+
+4. Let's imagine for a second that we scale all of our expected values by a factor of $10$, such that $EV_{nachos} = 40$ and $EV_{burrito} = 30$. What is your expectation about how this should affect the probability of me preferring nachos over burritos? Now use your function to compute the actual probability. What happened? Can you think through reasons why this has happened?
+
+5. Building on exercise 4, let's try plotting the probability of choosing nachos over burritos, as the expected values of nachos and burritos change. Below is an example heatmap, where the range of expected values for each option ranges from $x \in [-2, 2]$. Try recreating this heatmap plot, and then expand it out to the range $x \in [-5, 5]$. What do we learn from this? In exercise 4, why did you observe the pattern of results you did? Hint: It may help you to check out the documentation for `tidyr::expand_grid`.
+
+```{r example-heatmap}
+#| echo = FALSE,
+#| messages = FALSE,
+#| warnings = FALSE
+
+expand_grid(
+  nacho_value = -2:2,
+  burrito_value = -2:2
+) %>%
+  rowwise() %>%
+  mutate(
+    p_nacho = softmax(
+      option_values = c(nacho_value, burrito_value),
+      option_chosen = 1
+    )
+  ) %>%
+  ungroup() %>%
+  ggplot(aes(x=nacho_value, y=burrito_value, fill=p_nacho)) +
+  geom_tile() +
+  scale_fill_viridis_c(limits = c(0, 1)) +
+  coord_fixed()
+```
+
+6. This is an exercise with a long exposition...
+
+As humans, we might have a psychological feeling that "scaling" all values (e.g., multiplying by a constant, as we did in exercise 4) should not greatly change our preference for a given option over another. And yet, that is exactly what we observed in exercise 4. In exercise 5, we got a better mathematical sense for why this happened. This illustrates the importance of being thoughtful about what kinds of values you're passing into a given choice function (like the softmax), and to have a sense for how the choice function will mathematically react to different kinds of values that we as humans psychologically think of as being the same. If the "raw" values being passed into the softmax are quite large (or quite small), you may want to consider re-scaling them into a range where the softmax is "better-behaved."
+
+One common method for doing this is using a "temperature" parameter to control how much a softmax function acts like a hardmax. The mathematical equation is below, where the parameter tau ($\tau \in (0, \infty]$) controls the softmax temperature. Note that in set notation, parentheses indicate that a number should *not* be included in the range. So although the temperature can get very close to zero, $\tau \ne 0$. As you can see below, $tau$ divides all raw values by a constant.
+
+$$p(choose \space x_i) = \Large{\frac{e^{x_i / \tau}}{\sum_{j=1}^{K} e^{x_j / \tau}}} \tag{1.1.2}$$
+
+Try modifying your softmax function so that it takes another input for temperature, which is then used to scale the raw values. If a temperature argument is not provided by the user, then set the default temperature to one.
+
+Now, re-plot your heatmap from exercise 5. What happens as the temperature increases? What happens as the temperature decreases to near-zero? Here are some common ways of describing the temperature parameter: it makes an agent more-or-less "noisy" or "random" of a decision-maker; it makes an agent more-or-less "sensitive" to value differences; it makes an agent more or less "exploratory" in how they make decisions. All of these descriptions are true and valid, and conceptually useful in different ways, for different contexts.
+
+7. In exercise 4, let's say you didn't want to scale your values before passing them to the softmax. How could you accordingly adjust your softmax temperature to achieve the same answer as you did in exercise 1?
+
+8. Let's say a friend of yours researches how ADHD affects how randomly people make choices, with the general hypothesis that people with ADHD make decisions more randomly. In one of her past studies, a sample of control subjects performed a food preference task. In a *different* past study, she recruited a group of ADHD-diagnosed subjects to perform a gambling task. Due to the pandemic, she is having trouble collecting new data, and therefore wants to use computational modeling to re-analyze some of her old data. When she fits her choice models, she finds that subjects in the ADHD group have a greater estimated temperature parameter than subjects in the control group. She claims that these modeling results support her hypothesis. Do you agree with her? Why or why not?
+
+9. At this point, you've created a nice function for passing values through a softmax function. We'd like to be able to re-use this function in the future. Create a new R script where you define your custom softmax function, and save it as `code/utils.R`. Restart R (in RStudio, you can click `Session >> Restart R` to do this without quitting the program entirely). Assuming that you've cloned this repository from GitHub, you should now be able to run the following code to load your custom function back into your environment. To verify that it works, try re-running your code from exercise 5.
+
+```{r load-custom-function}
+#| eval = FALSE
+
+source(here("code", "utils.R"))
+```
+
+
+# Next time...
+
+In the next tutorial, we'll learn how to extend expected value models to explain how people's choices are impacted by risk and ambiguity. We'll practice translating qualitative theories (people are risk-averse) into mathematical models (risk aversion attenuates the value of an uncertain option), and will then translate mathematical models into computational functions that can help us gain insight into a model's predictions about behavior.

@@ -1,0 +1,487 @@
+---
+title: "Risk and Ambiguity: Model Fitting"
+subtitle: "Session 1-3"
+author: "Jae-Young Son"
+date: "March 7, 2022"
+output:
+  html_document:
+    code_download: true
+    code_folding: show
+    toc: true
+    toc_float:
+      collapsed: false
+---
+
+# Setup
+
+We'll load in the usual packages we use...
+
+```{r load-libraries}
+library(tidyverse)
+suppressMessages(library(here))
+```
+
+Along with our custom utility functions.
+
+```{r dummy-utils}
+#| eval = FALSE
+
+source(here("code", "utils.R"))
+```
+
+```{r real-utils}
+#| echo = FALSE
+
+source(here("tutorial_code", "utils.R"))
+```
+
+Finally, we'll load some real gambling data that we'll later use to fit models.
+
+```{r load-data}
+behav <- here("data", "risk_amb_gambling.csv") %>%
+  read_csv(show_col_types = FALSE)
+```
+
+
+# Introduction
+
+In our last tutorial, we tried our hand at simulating behavior from a subjective utility model, given an agent's risk and ambiguity preferences. We found that simulating a model's predictions / behaviors can be useful for understanding exactly what the model is doing, and why. This can be very helpful when we are working with new or unfamiliar models.
+
+In other words: when we simulate, we know what the model parameters are, but we *don't* know what the behavior is.
+
+When we have real behavioral data from human participants, we find ourselves in the opposite situation: we know what the behavior is, but we *don't* know what the model parameters are.
+
+That's the problem we'll be trying to solve when we perform parameter-fitting (equivalently, parameter estimation). Let's try to re-express this verbal statement in the language of math.
+
+# Likelihood function
+
+## Definition of likelihood
+
+Let's say that each participant is a data-generating system producing behavior that is noisy, but still systematically distributed in a way that's distinct from how other participants distribute their behavior. This is essentially the definition of a random variable. By convention, random variables are denoted by uppercase letters. Here, we'll use $Y$. Each trial $y_1, y_2, \cdots, y_n$ is a sample of this random variable $Y$.
+
+In our risk/ambiguity utility model, recall that we have three parameters: risk preference $\alpha$, ambiguity preference $\beta$, and sensitivity to changes in utility $\tau$ (i.e., softmax temperature). We can think of all of these parameters as belonging to a set. Conventionally, the Greek letter theta $\theta$ denotes a set of parameters.
+
+Remember that in simulation, the model was *given* parameter values, from which it generated behavior. Analogously, we will be computing the probability of having observed some behavior, *given* a guess about the true parameter value. This is the definition of the ***likelihood*** of a parameter estimate. If we use our fancy math to write out this idea, we get something like this:
+
+$$\mathcal{L}(\theta | Y) = P(Y = y | \theta) \tag{1.3.1}$$
+
+Let's break it down.
+
+The likelihood is denoted by $\mathcal{L}(\theta | Y)$. This is the most straightforward mathematical expression of reality: we have some data about a participant's choices, and the data is "fixed" in the sense that we cannot change it. The parameters, on the other hand, are "free" in the sense that we can keep adjusting their values until we get a good match between the model and the data. In other words, we're computing how likely it is that we've guessed the "correct" values of our parameters ($\theta$), given the random variable $Y$. Recall that we're treating each participant like they're a data-generating random variable. So we're really saying is this: given this participant's choices, how likely are our parameter estimates?
+
+Positing a likelihood function isn't particularly helpful without defining what the function actually does, so now we must define the relationship between $\theta$ and $Y$. The equation states that the likelihood is defined as the probability $P(Y = y | \theta)$. The funky-looking notation $Y=y$ just reminds us that we don't have direct access to $Y$, only samples/observations from trials $y_1, y_2, \cdots, y_n$. So the likelihood is the probability that the random variable $Y$ takes on the value observed on trial $y$, given our guesses about the parameter values. But what's the logic for this? If a model is actually good at describing reality, then a well-chosen $\theta$ will be very *likely* to to generate predictions that mirror the data (this is where the name likelihood function comes from). The likelihood function therefore quantifies how likely it is to observe data, given the parameter estimate under consideration.
+
+As we'll see in the upcoming section about optimization, the goal of parameter-fitting is to find the set of parameter values that *maximizes* the likelihood.
+
+## Likelihood of binary choice data
+
+Although we've specified that the likelihood is a probability, we still haven't quite gotten around to defining how to compute that probability. There's a reason for this, which is that different kinds of data require different kinds of computations. When we have binary choices, we encode those as $\text{yes} = 1$ and $\text{no} = 0$, and no other values are allowed. This is known as the Bernoulli distribution, and it looks very different from the Gaussian distribution of continuous outcomes, such as height and weight. We'll cover the likelihood function for Gaussian distributions in a future tutorial.
+
+For binary-choice outcomes, the model will predict the probability of saying "yes" on trial number $i$, given the estimated parameters. We can write that as $p_{\theta} = P(y_i = 1 | \theta)$.
+
+The likelihood for a single trial is therefore:
+
+$$P(y_i | p_{\theta}) =( p_{\theta})^{y_i} (1 - p_{\theta})^{1-y_i} \tag{1.3.2}$$
+
+We could alternatively write that as:
+
+$$
+P(y_i | p_{\theta}) = 
+\begin{cases}
+p_{\theta} & \text{if } y_i = 1 \\
+1 - p_{\theta} & \text{if } y_i = 0
+\end{cases}
+\tag{1.3.3}
+$$
+
+As a quick exercise, verify for yourself that equations 2 and 3 are equivalent.
+
+How do we get the overall likelihood, integrating over all trials? From probability theory, you might remember that the probability of observing multiple outcomes is the product of each outcome's probability. Concretely, the probability of observing "heads" during a coin flip is $0.5$, the probability of observing two heads is $0.5 \times 0.5 = 0.25$, and so on.
+
+Therefore, we can compute the likelihood for each trial independently, then multiply those likelihoods together. The mathematical equation expressing this idea is:
+
+$$\mathcal{L}(\theta | Y) = \prod_{i=1}^{n} P(y_i | p_{\theta}) \tag{1.3.4}$$
+
+## Code example
+
+If you're like me, seeing a verbal explanation of a mathematical equation goes a long way in helping clarify the underlying concepts. But, I often find it most useful to see it implemented in code. So if you feel a little bit lost, let's work through an example together. Hopefully, this will help clarify the ideas, and then you can go back to the math once you have a conceptual scaffold to work from.
+
+These are unpublished data graciously provided by Marc-Lluis Vives, collected online. In this particular paradigm, the "sure bet" was \$1, and the gambles were worth \$1, \$1.60, \$4, \$10, and \$25 if won.
+
+For demonstration, we'll look at just a few trials from a single participant. In the absence of knowledge about what the participant's true risk and ambiguity preferences are, we're going to guess that they are completely risk- and ambiguity-neutral. Therefore, we'll define $\theta = (\alpha=1, \beta=0, \tau=1)$. Last time, we wrote a function for computing utility under risk and ambiguity. We'll first use that function to compute how much utility an artificial agent would get from the gamble on each trial. Then, we'll compute the probability that the artificial agent would pick the uncertain gamble over the sure \$1.
+
+So far, so good; this is just a rehash of what we did last time. Now, we take it one step further. The softmax-predicted probability of gambling is $p_{\theta}$, and the participant's actual choice on each trial is $y_i$. Knowing this, we can use equation 3 as a guide for computing the likelihood.
+
+```{r calc-log-loss}
+est_alpha <- 1
+est_beta <- 0
+est_tau <- 1
+
+behav %>%
+  filter(
+    sub_id == 9,
+    gamble_amount == 1.6
+  ) %>%
+  rowwise() %>%
+  mutate(
+    # Compute utility, given trial data and estimated parameters
+    est_utility = compute_utility_risk_amb(
+      agent_alpha = est_alpha,
+      agent_beta = est_beta,
+      gamble_value = gamble_amount,
+      gamble_win_prob = p_win,
+      gamble_amb = amb_level
+    ),
+    # Compute probability of gambling, given its utility
+    est_p_gamble = softmax(
+      option_values = c(est_utility, 1),
+      option_chosen = 1,
+      temperature = est_tau
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    likelihood = if_else(choice == 1, est_p_gamble, 1 - est_p_gamble)
+  ) %>%
+  knitr::kable()
+```
+
+And there we have it: the likelihood of observing the participant's choice on each trial, given a set of parameters that we guess might be a good fit. The goal now is to find the parameter values that maximize the likelihood, and therefore provide the best fit of the model to the data.
+
+## Exercises: manually maximizing likelihood
+
+1. Try plotting subject 9's choices. Every unique trial type (i.e., combination of gamble type, gamble amount, probability of winning, and ambiguity level) was sampled twice, so you might find it useful to summarize over those variables before plotting.
+
+2. What do you notice about this subject's choices? Knowing this, try to manually guess values of $\alpha$ and $\beta$ that increase the likelihood of subject 9's choices, when the gamble amount is \$1.60. What seems to work, and what doesn't?
+
+
+# Optimization
+
+I imagine that you've got better things to do than to sit around all day manually plugging in parameter guesses until you find a solution that seems to maximize the likelihood. This is what ***optimizers*** are designed to do: optimize parameter values to fulfill an objective. Our objective, in this case, is to find the value(s) of $\theta$ that maximize the likelihood. As my description implies, we can write a function that tells the optimizer what our objective is... this function is called, sensibly enough, the ***objective function***.
+
+It's not too hard to write one. In fact, we've basically already done it. Since the objective is to maximize the likelihood, we simply have to *calculate* the likelihood. The optimizer will then automatically try out a whole bunch of parameter values, and try to fulfill whatever objective is defined by the objective function.
+
+There are a few complications though, that require us to jump through a few extra hoops when we're writing the objective function. We'll go through them now.
+
+## Assembling the objective function
+
+### The problem of small numbers
+
+Computers are not good at representing very small numbers. Once you start with numbers that are very close to zero, computers become increasingly imprecise at differentiating between these numbers, and will make numeric precision errors. Why is this an issue for us?
+
+Recall that to find the overall likelihood over many trials, we're multiplying many probabilities together. This will quickly produce very small numbers that, to a computer, become indistinguishable from zero.
+
+We can solve this problem by applying a logarithmic transformation to the likelihood. Why logarithms? First, they have the nice property of turning very small numbers into bigger number that computers can handle with less error. Second, they also have the property $log(A \times B) = log(A) + log(B)$, which makes it really easy to multiply likelihoods over many trials; we just add together all of the log-likelihoods.
+
+By convention, we use the natural logarithm, which can be mathematically noted as $ln$. In practice, $log$ and $ln$ are used interchangeably. The R function `log` by default computes the natural logarithm.
+
+### The problem with logarithms
+
+Unfortunately, the use of logarithms comes with its own complication: the value of $log(0)$ is not defined. Try typing that into R to see what it returns. When the optimizer is completely wrong, you'll produce an error that will terminate the entire optimization procedure. In a second, we'll discuss how to circumvent this problem.
+
+### Maximizing via minimization
+
+For somewhat obscure reasons, many optimizers are actually minimizers, not maximizers. This is true not only of R's built-in optimizer `optim`, but also of Matlab's `fmincon` and Python's `scipy.optimize.fmin`. So in order to get our optimizer to maximize the log-likelihood, *we actually have to minimize the negative log-likelihood*. We can do this simply by multiplying the log-likelihood by $-1$.
+
+### Negative log-likelihood
+
+To get our objective function to play nice with the optimizer, we'll need to massage the raw likelihood into a negative log-likelihood. We'll also have to check whether any likelihoods are (functionally) equal to zero, as the optimizer will return an error and stop if the objective function returns $\pm \infty$. In place of $\infty$, we can substitute in a very large value. Below, you can see a function I've written to do this. Go ahead and add it to your `utils.R` script.
+
+```{r def-neg-loglik}
+neg_loglik_logistic <- function(likelihood) {
+  if ( any(is.nan(likelihood)) ) {
+    warning("Some likelihoods originally NaN, returning NA")
+    likelihood <- replace(likelihood, is.nan(likelihood), NA_real_)
+  }
+  if ( !all(likelihood > 0 & likelihood <= 1) ) {
+    warning("Some likelihoods out of range (0, 1], returning NA")
+    likelihood <- replace(likelihood, (likelihood<=0|likelihood > 1), NA_real_)
+  }
+  
+  return( -1 * log(likelihood) )
+}
+```
+
+Now that this function is a part of our toolbox, we can compute the negative log-likelihood. Give it a try, and check whether your results mirror mine for subject 9, gamble amount \$1.60.
+
+```{r demo-neg-loglik}
+#| echo = FALSE
+
+behav %>%
+  filter(
+    sub_id == 9,
+    gamble_amount == 1.6
+  ) %>%
+  rowwise() %>%
+  mutate(
+    # Compute utility, given trial data and estimated parameters
+    est_utility = compute_utility_risk_amb(
+      agent_alpha = est_alpha,
+      agent_beta = est_beta,
+      gamble_value = gamble_amount,
+      gamble_win_prob = p_win,
+      gamble_amb = amb_level
+    ),
+    # Compute probability of gambling, given its utility
+    est_p_gamble = softmax(
+      option_values = c(est_utility, 1),
+      option_chosen = 1,
+      temperature = est_tau
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    likelihood = if_else(choice == 1, est_p_gamble, 1 - est_p_gamble),
+    neg_ll = neg_loglik_logistic(likelihood)
+  ) %>%
+  knitr::kable()
+```
+
+### The objective function
+
+We're almost there! We need a function that returns the overall (negative log) likelihood, summed over all trials. As input, it should take the following as arguments:
+
+1. A vector of numbers, as long as the number of free parameters, containing the most recent guesses about the parameter values
+2. A dataframe containing all relevant information for computing the negative log-likelihood
+
+You might be wondering why we're passing in a vector of guesses about the parameter values, then unpacking them within the function. This will be made clearer in a minute.
+
+```{r real-obj-fun}
+#| echo = FALSE
+
+amb_risk_obj_fun <- function(param_guesses, gambling_data) {
+  # Unpack parameters
+  est_alpha <- param_guesses[1]
+  est_beta <- param_guesses[2]
+  est_tau <- param_guesses[3]
+  
+  # Calculate neg-ll
+  eval_fit <- gambling_data %>%
+    rowwise() %>%
+    mutate(
+      # Compute utility, given trial data and estimated parameters
+      est_utility = compute_utility_risk_amb(
+        agent_alpha = est_alpha,
+        agent_beta = est_beta,
+        gamble_value = gamble_amount,
+        gamble_win_prob = p_win,
+        gamble_amb = amb_level
+      ),
+      # Compute probability of gambling, given its utility
+      est_p_gamble = softmax(
+        option_values = c(est_utility, 1),
+        option_chosen = 1,
+        temperature = est_tau
+      )
+    ) %>%
+    ungroup() %>%
+    mutate(
+      # The line immediately below was added after realizing that the softmax
+      # returns NaN for temperatures very close to 0
+      est_p_gamble = if_else(is.nan(est_p_gamble), 0, est_p_gamble),
+      likelihood = if_else(choice == 1, est_p_gamble, 1 - est_p_gamble),
+      neg_ll = neg_loglik_logistic(likelihood)
+    )
+  
+  return ( sum(eval_fit$neg_ll) )
+}
+```
+
+```{r demo-obj-fun}
+#| eval = FALSE
+
+amb_risk_obj_fun <- function(param_guesses, gambling_data) {
+  # Unpack parameters
+  est_alpha <- param_guesses[1]
+  est_beta <- param_guesses[2]
+  est_tau <- param_guesses[3]
+  
+  # FILL IN: given the parameter values, calculate neg-ll
+  # ...
+  
+  # FILL IN: sum neg-ll over all trials, then return that value
+  # ...
+  return ( neg_ll )
+}
+```
+
+## Feeding the optimizer
+
+Alrighty, it took a few steps, but now we've got an objective function in hand! Now let's actually run the optimizer. There are a few things to note about the example below.
+
+1. We have to provide the optimizer with an initial vector of parameter values, which will be the starting point from which the optimizer will look for a solution. This is why we specified the parameter guesses as a vector in our objective function. If you input the same starting values as I have, you will most likely converge upon the exact same answer.
+
+2. The objective function is provided as an argument to `fn`, *without* any of its own arguments.
+
+3. Our objective function has an argument for `gambling_data`, and so when you call `optim`, you need to provide that named argument. 
+
+4. Here, we provide a control argument specifying the maximum number of guesses the the optimizer is allowed to make. This can be useful for limiting how long the optimizer is allowed to search before giving up. Here, we've set the maximum number of iterations to 1000.
+
+```{r barebones-optim}
+optim(
+  par = c(1, 0, 1),
+  fn = amb_risk_obj_fun,
+  gambling_data = behav %>% filter(sub_id == 9),
+  control = list(maxit = 1000)
+)
+```
+
+The result comes in the form of a somewhat cryptic-looking named list. The entry `$par` is the final set of parameter values guessed by the optimizer. They correspond to $\alpha$, $\beta$, and $\tau$, in that order, because that's the order in which we unpacked them in the script. Try changing around the ordering in the objective function, and see what the optimizer subsequently returns. The entry `$value` is the smallest negative log-likelihood that the optimizer could find, given the final parameter estimates. The entry `$counts` is another named list, and the relevant piece of information here is that the optimizer tried 140 guesses before concluding that it had found the best parameters. The `$convergence` and `$message` entries signal whether something went wrong during optimization; see the help documentation for details.
+
+### Exercises: Optimization
+
+1. R makes widespread use of a construct called the ***ellipsis***, written as `...`, which can serve a number of very useful purposes. Try doing a web search for examples. One such purpose is to pass named arguments from one function to another. You might have wondered how `optim` knows to pass along the correct arguments to our objective function. The answer is that `optim` specifies ellipses in its function call, and that under the hood, `optim` passes along any extra named arguments to the function being optimized. As a test, see what happens when you change the argument `gambling_data = behav` to `my_data = behav`...
+
+2. The starting guesses can have a biasing impact on where the optimizer ends up. Try changing these initial guesses to something larger (e.g., try `10, 10, 10`), and see what happens. Then, try changing the initial guess to `1, 1, 1`... Compare that output to what we started with, when we initially guessed `1, 0, 1`. This exercise encourages you to think carefully about what values are reasonable starting places, not only for calling the optimizer, but also when writing your models / objective functions. In other words: values in the range $\pm 1$ are often reasonable starting guesses, *and* you should consider writing your equations in such a manner that reasonable behaviors can be often/mostly be found when parameters live in the range $\pm 1$.
+
+3. The standard operating procedure for optimization is to run the optimizer many times. Each time, you'll randomly generate starting values in a *reasonable* range. Whatever set of parameter values *best* maximizes the likelihood is the *single* set of parameters that you'll use for inference. Try writing a script (it doesn't have to be polished) that does this, and try running the optimizer a few times. You may notice instances in which changes in the parameter values result in a greater/lesser likelihood, and you may also notice instances in which parameter value differences still result in the same likelihood. What accounts for both of these potential outcomes?
+
+4. Subject 2 is a great datapoint, not in the sense that they did a particularly good job, but in the sense that they behaved so weirdly that it can help us learn something. Without looking at their behavior, run the optimizer using the neutral starting guess `1, 0, 1`. What do you notice about the results? How would you interpret the estimated parameters, if you took them at face value? Now, take a look at their behavior, either by examining the table or by plotting their decisions. What does this teach us about computational modeling?
+
+5. For the purpose of learning, subject 4 is also instructive. Do the same thing for subject 4 as you did for subject 2.
+
+
+# Goodness-of-fit
+
+In the optimization exercises, we saw that subject 2 gives us a great example why it's critical for us to examine the output of computational models. For this reason, it's important to assess how well a model's estimated parameters fit the data. In other words, part of our computational modeling pipeline needs to include assessing the model's goodness-of-fit. Broadly speaking, there are two kinds of approaches you can take to this problem, both of which are useful and complementary.
+
+## Summary statistics
+
+The first approach is to calculate some summary statistics, which provide a single quantitative measure of how well the model describes (vs deviates from) the data. This is particularly useful when you've got multiple models, with different parameters and mathematical specifications, and you're trying to figure out which of the models does the "best" job of describing the data.
+
+Of course, the likelihood itself is a statistic, and a somewhat naive approach is to simply compare the likelihoods to each other. Since we're minimizing negative log likelihoods, whatever model produces the smallest number (i.e. closer to $-\infty$) "wins." This naive approach is a little problematic because a model containing more parameters has more freedom to shape the model predictions. Using the raw likelihood therefore provides an incentive to fit unnecessarily complex models with lots and lots of parameters.
+
+A commonly-used workaround is to modify the (negative log) likelihood so that you penalize for the number of free parameters in the model. This way, you will favor parsimonious model that are *almost* as good as more complex models. Models with more parameters can will "win" over simpler models, but they have to produce better likelihoods to do so.
+
+For our purposes, we'll focus on on one kind of summary statistic, the Bayesian Information Criterion (BIC). We don't have the time or space to discuss exactly how this statistic is derived, but just keep in mind that it tries to balance model complexity with explanatory power.
+
+The equation is provided below.
+
+$$\text{BIC} = k \space \text{ln}(n) - 2 \space \text{ln}(\mathcal{\hat{L}}) \tag{1.3.5}$$
+
+Here, $k$ is the number of free parameters in the model, $n$ is the number of data points used to fit those parameters, and $\mathcal{\hat{L}}$ is the estimated maximimum likelihood (note: it is *neither* the log-likelihood, nor is it the negative log-likelihood). Like the raw negative log likelihood, smaller BICs are better, such that numbers approaching $-\infty$ are better.
+
+Try your hand at writing a function that will compute the BIC, then check your work against mine. Once you're satisfied that your function works, add it to `utils.R`.
+
+```{r def-bic}
+#| echo = FALSE
+
+calculate_bic <- function(n_params, n_datapoints, neg_loglik) {
+  return ( (n_params * log(n_datapoints)) - (2 * -neg_loglik) )
+}
+```
+
+```{r test-bic}
+n_parameters <- 3  # alpha, beta, tau
+n_datapoints <- behav %>% filter(sub_id == 9) %>% nrow()
+nll <- optim(
+  par = c(1, 0, 1),
+  fn = amb_risk_obj_fun,
+  gambling_data = behav %>% filter(sub_id == 9),
+  control = list(maxit = 1000)
+)$value
+
+calculate_bic(
+  n_params = n_parameters,
+  n_datapoints = n_datapoints,
+  neg_loglik = nll
+)
+```
+
+### Exercise: BIC
+
+1. The BIC is most useful for comparing the likelihoods of competing models, and assessing which of those models best fits the data. To make this concrete, try specifying an objective function that only models risk preference, not ambiguity preference. Estimate parameters for this model using subject 9's data, then calculate the BIC. How does the risk-only model compare against the model that contains parameters for both risk and ambiguity?
+
+2. Your friend argues that when performing model selection between competing models, you should always favor the model with the lowest BIC. Your friend argues that it is an unbiased, quantitative, and fair method that prevents researchers from cherry-picking models that they happen to like (e.g. because those models favor their hypothesis). In what ways do you agree or disagree with your friend, and how would you respond to their argument?
+
+
+## Posterior predictive check
+
+A summary statistic can tell you that a particular model and/or set of parameters best maximizes the likelihood, but it cannot give you any particular insight into *why* the likelihood was maximized.
+
+For example, you could imagine that for a given subject, the model might do a great job at explaining the subject's risk preferences, but a terrible job at explaining their ambiguity preference. This is a qualitative pattern that is hard to summarize in a single quantitative statistic.
+
+This is where a posterior predictive check (PPC) comes in handy. The idea behind PPC is simple: given the parameters estimated by the model, simulate behavior and then compare it against the subject's actual behavior. To the extent that the model is making accurate (or inaccurate) predictions, you'll be able to see it with your own eyes. To the extent that the model systematically makes mistakes for certain conditions / kinds of behavior, you'll be able to assess this too.
+
+Below, you can see an example with subject 9. Note that little new code was written; instead, we're mostly drawing on our existing simulation function, straight from the objective function.
+
+```{r demo-ppc}
+ppc_sub <- 9
+
+# Estimate parameters
+ppc_params <- optim(
+  par = c(1, 0, 1),
+  fn = amb_risk_obj_fun,
+  gambling_data = behav %>% filter(sub_id == ppc_sub),
+  control = list(maxit = 1000)
+)
+
+# Unpack list of parameters
+ppc_alpha <- ppc_params$par[1]
+ppc_beta <- ppc_params$par[2]
+ppc_tau <- ppc_params$par[3]
+
+# Retrieve human task & choice data
+behav %>%
+  filter(sub_id == ppc_sub) %>%
+  # Now start simulating artificial agent's data
+  rowwise() %>%
+  mutate(
+    # Compute utility, given trial data and estimated parameters
+    est_utility = compute_utility_risk_amb(
+      agent_alpha = ppc_alpha,
+      agent_beta = ppc_beta,
+      gamble_value = gamble_amount,
+      gamble_win_prob = p_win,
+      gamble_amb = amb_level
+    ),
+    # Compute probability of gambling, given its utility
+    est_p_gamble = softmax(
+      option_values = c(est_utility, 1),
+      option_chosen = 1,
+      temperature = ppc_tau
+    )
+  ) %>%
+  ungroup() %>%
+  # Now do some tidying for plotting
+  mutate(
+    uncertainty_amount = if_else(gamble_type == "risk", 1-p_win, amb_level)
+  ) %>%
+  select(
+    gamble_amount,
+    gamble_type,
+    uncertainty_amount,
+    empirical = choice,
+    simulated = est_p_gamble
+  ) %>%
+  pivot_longer(
+    cols = c(empirical, simulated),
+    names_to = "agent",
+    values_to = "choice"
+  ) %>%
+  group_by(gamble_amount, gamble_type, uncertainty_amount, agent) %>%
+  summarise(
+    choice = mean(choice),
+    .groups = "drop"
+  ) %>%
+  # Finally, plot
+  ggplot(aes(x=gamble_amount, y=choice, color=agent)) +
+  facet_grid(
+    rows = vars(uncertainty_amount),
+    cols = vars(gamble_type)
+  ) +
+  geom_point() +
+  geom_line()
+```
+
+### Exercises: PPC
+
+1. Qualitatively, what did the model get right about subject 9's behavior? What did it miss? And what does this PPC suggest about *why* the model got some things wrong?
+
+2. Compute the BICs for subjects 2, 4, and 9. What does this summary statistic suggest about how well the model explains data?
+
+3. Based on this knowledge, consider the parameter estimates for each of your subjects. At face value, what simulated behaviors do you expect to see, given those parameters?
+
+4. Now examine the PPC for subjects 2 and 4. What do you observe? Does this PPC tell you something important that would otherwise be hard to observe from the summary statistics / model estimates alone?
+
+5. Consider this: is there a way of anticipating which subjects might not be fit well by the model, before running the model? What does that tell you about the importance of understanding both the computational model, and the behavior that informs it?
