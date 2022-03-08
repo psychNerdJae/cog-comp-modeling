@@ -185,17 +185,24 @@ For somewhat obscure reasons, many optimizers are actually minimizers, not maxim
 
 ### Negative log-likelihood
 
-To get our objective function to play nice with the optimizer, we'll need to massage the raw likelihood into a negative log-likelihood. We'll also have to check whether any likelihoods are (functionally) equal to zero, as the optimizer will return an error and stop if the objective function returns $\pm \infty$. In place of $\infty$, we can substitute in a very large value. Below, you can see a function I've written to do this. Go ahead and add it to your `utils.R` script.
+To get our objective function to play nice with the optimizer, we'll need to massage the raw likelihood into a negative log-likelihood. We'll also have to check whether any likelihoods are (functionally) equal to zero, as the optimizer will return an error and stop if the objective function returns $\pm \infty$. In place of $\infty$, we can substitute in `NA_real_`. Below, you can see a function I've written to do this. Go ahead and add it to your `utils.R` script.
 
 ```{r def-neg-loglik}
 neg_loglik_logistic <- function(likelihood) {
-  if ( any(is.nan(likelihood)) ) {
+  if (any(is.nan(likelihood))) {
     warning("Some likelihoods originally NaN, returning NA")
     likelihood <- replace(likelihood, is.nan(likelihood), NA_real_)
   }
-  if ( !all(likelihood > 0 & likelihood <= 1) ) {
-    warning("Some likelihoods out of range (0, 1], returning NA")
-    likelihood <- replace(likelihood, (likelihood<=0|likelihood > 1), NA_real_)
+  
+  if (any(is.infinite(log(likelihood)))) {
+    warning("Some likelihoods are too close to 0, returning NA")
+    likelihood <- replace(likelihood, is.infinite(log(likelihood)), NA_real_)
+  }
+  
+  if (all(is.na(likelihood))) {
+    warning("All likelihoods NA. Likely, the softmax temp is near-zero.")
+  } else if (any(likelihood <= 0 | likelihood > 1, na.rm = TRUE)) {
+    stop("Some likelihoods out of range (0, 1]. Check for bugs.")
   }
   
   return( -1 * log(likelihood) )

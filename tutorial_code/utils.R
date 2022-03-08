@@ -1,3 +1,38 @@
+#### Risk/ambiguity utility ####
+
+compute_utility_risk_amb <- function(
+  agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
+) {
+  # Check for mistakenly-typed risk/ambiguity
+  if (!between(gamble_win_prob, 0, 1) | !between(gamble_amb, 0, 1)) {
+    stop("The gamble risk/ambiguity must fall in [0, 1].")
+  }
+  
+  # Check whether risk level is appropriate, given ambiguity level
+  if (gamble_amb != 0 & gamble_win_prob != 0.5) {
+    warning("Non-zero ambiguity level specified. Risk level changed to 50%.")
+    gamble_win_prob <- 0.5
+  }
+  return (
+    (gamble_value^agent_alpha) * (gamble_win_prob + (agent_beta * gamble_amb / 2))
+  )
+}
+
+
+#### Reinforcement learning ####
+
+learn_rl_td <- function(learning_rate, reward, value_estimate) {
+  
+  new_value_estimate <- value_estimate + (
+    learning_rate * (reward - value_estimate)
+  )
+  
+  return ( new_value_estimate )
+}
+
+
+#### General-purpose ####
+
 softmax <- function(option_values, option_chosen, temperature = NULL) {
   
   if (is.null(temperature) | !is.numeric(temperature)) {
@@ -11,18 +46,30 @@ softmax <- function(option_values, option_chosen, temperature = NULL) {
   return (numerator / denominator)
 }
 
-neg_loglik_logistic <- function(choice_probs) {
-  if (all(choice_probs > 0 & choice_probs <= 1)) {
-    return( -1 * log(choice_probs) )
-  } else {
-    warning("Choice probabilities out of range (0, 1]. Returning 1e10 instead.")
-    return( 1e10 )
+neg_loglik_logistic <- function(likelihood) {
+  if (any(is.nan(likelihood))) {
+    warning("Some likelihoods originally NaN, returning NA")
+    likelihood <- replace(likelihood, is.nan(likelihood), NA_real_)
   }
+  
+  if (any(is.infinite(log(likelihood)))) {
+    warning("Some likelihoods are too close to 0, returning NA")
+    likelihood <- replace(likelihood, is.infinite(log(likelihood)), NA_real_)
+  }
+  
+  if (all(is.na(likelihood))) {
+    warning("All likelihoods NA. Likely, the softmax temp is near-zero.")
+  } else if (any(likelihood <= 0 | likelihood > 1, na.rm = TRUE)) {
+    stop("Some likelihoods out of range (0, 1]. Check for bugs.")
+  }
+  
+  return( -1 * log(likelihood) )
 }
 
 calculate_bic <- function(n_params, n_datapoints, neg_loglik) {
   return ( (n_params * log(n_datapoints)) - (2 * -neg_loglik) )
 }
+
 
 #### Tidy optimization ####
 
@@ -61,24 +108,5 @@ run_optim <- function(max_iter_per_run, objective_function,
       control = list(maxit = max_iter_per_run)
     ) %>%
       optim_to_tibble(param_names_copy)
-  )
-}
-
-
-compute_utility_risk_amb <- function(
-  agent_alpha, agent_beta, gamble_value, gamble_win_prob, gamble_amb
-) {
-  # Check for mistakenly-typed risk/ambiguity
-  if (!between(gamble_win_prob, 0, 1) | !between(gamble_amb, 0, 1)) {
-    stop("The gamble risk/ambiguity must fall in [0, 1].")
-  }
-  
-  # Check whether risk level is appropriate, given ambiguity level
-  if (gamble_amb != 0 & gamble_win_prob != 0.5) {
-    warning("Non-zero ambiguity level specified. Risk level changed to 50%.")
-    gamble_win_prob <- 0.5
-  }
-  return (
-    (gamble_value^agent_alpha) * (gamble_win_prob + (agent_beta * gamble_amb / 2))
   )
 }
