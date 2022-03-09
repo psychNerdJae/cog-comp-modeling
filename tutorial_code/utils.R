@@ -46,6 +46,14 @@ softmax <- function(option_values, option_chosen, temperature = NULL) {
   return (numerator / denominator)
 }
 
+logistic_standard <- function(x) {
+  return ( 1 / (1 + exp(-x)) )
+}
+
+logistic_general <- function(x, lower_bound=0, upper_bound=1) {
+  lower_bound + (upper_bound - lower_bound) / (1 + exp(-x))
+}
+
 neg_loglik_logistic <- function(likelihood) {
   if (any(is.nan(likelihood))) {
     warning("Some likelihoods originally NaN, returning NA")

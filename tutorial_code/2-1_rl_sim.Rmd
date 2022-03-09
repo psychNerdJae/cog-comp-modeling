@@ -1,0 +1,306 @@
+---
+title: "Reinforcement Learning: Model Simulation"
+subtitle: "Session 2-1"
+author: "Jae-Young Son"
+date: "March 8, 2022"
+output:
+  html_document:
+    code_download: true
+    code_folding: show
+    toc: true
+    toc_float:
+      collapsed: false
+---
+
+# Setup
+
+We'll load in the usual packages we use...
+
+```{r load-libraries}
+library(tidyverse)
+suppressMessages(library(here))
+```
+
+Along with our custom utility functions.
+
+```{r dummy-utils}
+#| eval = FALSE
+
+source(here("code", "utils.R"))
+```
+
+```{r real-utils}
+#| echo = FALSE
+
+source(here("tutorial_code", "utils.R"))
+```
+
+
+# Reinforcement learning as expected value
+
+Reinforcement learning (RL) is one of the most powerful and productive computational modeling frameworks in all of cognitive science. The basic idea is this: By navigating through some sort of environment (spatial, conceptual, abstract), an agent must use trial-and-error experience to appraise the value of being in a particular "state" of the environment. The agent must also learn what actions to take in a particular state in order to maximize the reward it can receive from its environment. This is a difficult learning problem because it is not always clear what states lead to reward, and the problem only gets worse if a specific sequence of state-action pairs is necessary to gain reward. Moreover, an environment can contain many different kinds of rewards, and a state that is rewarding today might not be rewarding tomorrow. What's more, an agent's actions can change its environment, and with it, the reward structure. Due to this uncertainty, it can be difficult for an agent to learn how to maximize long-term value, as it only has access to information about short-term rewards.
+
+You might find it surprising to hear that, at its core, the fundamental objective of RL is to learn expected value. Yes, you heard right: the very same expected value that we discussed in the context of gambling in our tutorials about utility modeling. However fancy the RL model, whatever the quantity being learned about, ultimately RL is a method for learning the expected value of something through trial-and-error experience.
+
+Let's make this intuition crystal clear.
+
+## Armed bandits
+
+A lot of research in RL has used some variant of a task known as an ***armed bandit***. This is a cheeky reference to the kinds of slot machines you'd find at a casino. A one-armed bandit has a single lever (arm) that robs gamblers of their money (bandit), and has some expected value of paying out. A two-armed bandit has two levers that have different payout structures, and therefore different expected values. In principle, many probabilistic decision making contexts (gambling or otherwise) can be modeled using an N-armed bandit task.
+
+For example: there are some restaurants on Thayer St. that make good food some days, and not-so-great food other days. If I felt a craving for Chinese-American takeout one day, there are a few options on Thayer that I could try out. But, I already know that the quality of food is going to be kind of dicey at all of the restaurants. It would be good to know that (restaurant name redacted) is good 80% of the time, whereas their competitor (redacted) is only good about 60% of the time. Although this superficially seems like a different kind of decision making problem, it actually is well-described by a two-armed bandit task.
+
+## Running average model
+
+For simplicity, let's consider a one-armed bandit that has a fixed probability of paying out. How would we calculate the expected value of winning on this slot machine? By definition, the expected value is the average, and so we've got to find a way to compute a running average over time. However, at each timestep $t$, we only have access to knowledge about the reward $r$ on that timestep. From individual observations of reward, we must somehow calculate the expected value $V$.
+
+If we were able to write down every outcome, then we could sum every reward and then divide by the number of observations. In mathematical notation, that statement can be written as:
+
+$$V_t = \frac{1}{t} \sum_{i=1}^{t} r_i \tag{2.1.1}$$
+
+And incidentally, that gives us exactly the equation required to compute the running average.
+
+If we use this as a learning model, how psychologically plausible is it? Well, consider trying to find the expected value of 10 versus 100 observations... or 1000. The problem with this model is that over time, you've got to store more and more things in memory. Over a lifetime, this is impossible to do, given the constraints on how much information our brains can store.
+
+## Temporal difference model
+
+We'd like to find an alternative formulation of the running average formula that allows us to keep the computational demands constant across time. How could we do this? Intuitively, we could say that we're only interested in *updating* our value estimate relative to our most recent *expectation*. In other words, we make a ***prediction*** about the ***reward*** we'll get next, observe what we reward we actually get, and then use the resulting ***reward prediction error*** as the basis for updating our value estimate. This is known as a ***temporal difference*** (TD) method because the prediction error is computed as the reward-value difference at two (successive) points in time.
+
+Let's do a little bit of algebra to see if we can rewrite our running average model into a TD model.
+
+We'll start with a running average:  
+$V_t = \frac{1}{t} \sum_{i=1}^{t} r_i$
+
+Let's explicitly expand out that summation:  
+$V_t = \frac{1}{t} (r_1 + r_2 + \space \cdots \space + r_{t-1} + r_{t})$
+
+Now, let's rewind one timepoint back, and rewrite that summation:  
+$V_{t-1} = \frac{1}{t-1} (r_1 + r_2 + \space \cdots \space + r_{t-2} + r_{t-1})$
+
+That can be algebraically rewritten to isolate the rewards on one side:  
+$(V_{t-1})(t-1) = (r_1 + r_2 + \space \cdots \space + r_{t-2} + r_{t-1})$
+
+At this point, we have an equation telling us how to get the sum of rewards all the way up to timepoint $t-1$, if we're currently at timepoint $t$. That is enormously useful because it means that we can get rid of the summation that we started out with in equation 2.1.1.
+
+In its place, we get this:  
+$V_t = \frac{1}{t}[(V_{t-1})(t-1) + r_t]$
+
+We multiply out the term $(V_{t-1})(t-1)$ to get this:  
+$V_t = \frac{1}{t}[(V_{t-1})(t) - V_{t-1} + r_t]$
+
+And it only takes a little more algebraic rearrangement to get this equation to reflect a learning model that's driven by prediction error (observed reward minus expected value):  
+$V_t = V_{t-1} + \frac{1}{t} (r_t - V_{t-1})$
+
+The idea of the reward prediction error is one of the most important ideas in RL, to the point that researchers commonly abbreviate it into a separate variable delta $\delta$. Delta is equivalent to "d" in English, and is commonly used as the shorthand for "difference" or "change":  
+$$
+V_t = V_{t-1} + \frac{1}{t} \delta, \\
+\delta = r_t - V_{t-1}
+\tag{2.1.2}
+$$
+
+The really nice thing about this form is that it only requires an agent to maintain three pieces of information: how many trials have occurred (number of times we've played the slot machine), the expected value of the slot machine (based on all observations so far), and the presently-observed reward from the slot machine. No matter how many observations have been made, the computational demands stay constant over time.
+
+## Simulating an armed bandit
+
+Seeing is believing, so let's write a function that will help us visualize how these learning agents work. We'll define a function that's basically a thin wrapper around an existing R function.
+
+```{r func-armed-bandit}
+play_bandit <- function(p_win, n_plays) {
+  return ( rbinom(n = n_plays, size = 1, prob = p_win) )
+}
+
+play_bandit(0.5, 10)
+```
+
+We can also write some functions implementing the running average vs temporal difference methods of learning expected value.
+
+Below, we've written an agent that learns running averages, using a formula that is exactly faithful to equation 2.1.1. Although it looks like just two pieces of information, remember that the reward history contains $t$ pieces of information, meaning that the computational (memory) demands increase over time.
+
+```{r func-run-avg}
+learn_running_avg <- function(current_trial, reward_history) {
+  for (t in 1:current_trial) {
+    expected_value <- (1/t) * sum(reward_history[1:t])
+  }
+  
+  return ( expected_value )
+}
+```
+
+And now, we can write an agent that learns via TD, using equation 2.1.2. Note that it only ever needs three pieces of information.
+
+```{r func-td-learning}
+learn_temporal_diff <- function(current_trial, reward, value_estimate) {
+  
+  expected_value <- value_estimate + (
+    (1/current_trial) * (reward - value_estimate)
+  )
+  
+  return ( expected_value )
+}
+```
+
+Let's now simulate a bunch of plays from a one-armed bandit with a 40% chance of winning, and obtain trial-by-trial estimates of expected value from each of our two models.
+
+```{r sim-bandit}
+bandit_outcomes <- play_bandit(p_win = 0.4, n_plays = 1000)
+
+# Initialize
+value_est_run_avg <- 0
+value_est_temp_diff <- 0
+
+for (t in 1:length(bandit_outcomes)) {
+  
+  reward_current <- bandit_outcomes[t]
+  
+  if (t == 1) {
+    reward_history <- reward_current
+  } else {
+    reward_history <- c(reward_history, reward_current)
+  }
+  
+  value_est_run_avg[t] <- learn_running_avg(
+    current_trial = t,
+    reward_history = reward_history
+  )
+  
+  value_est_temp_diff[t] <- learn_temporal_diff(
+    current_trial = t,
+    reward = reward_current,
+    value_estimate = ifelse(t == 1, 0, value_est_temp_diff[t-1])
+  )
+  
+}
+```
+
+## Exercises: Simulating EV
+
+1. Plot these two agents' learned expected values over time. What do you notice? Why does this happen? Hint: You may need to use `geom_jitter` if `geom_point` doesn't work out for you.
+
+2. Although we expect the EV estimates to stabilize to the "true" answer in the long run, all learning processes depend on the reward history, and the reward history is probabilistic. Try running the above code (including new plays from the bandit) a few times (at least five), and plot the results as in exercise 1. What do you notice?
+
+3. Now try increasing the number of plays from 100 to 1000. Try running that a few times too, and plot the results. What do you observe about this?
+
+
+# Learning value in a changing world
+
+It's great that in TD, we have such a simple yet powerful model for estimating value from rewards. But unfortunately, there's a major problem with this version of the TD model. In the real world, the expected value of a given stimulus could change, and averages would be slow to keep up. A collaborator starts experiencing academic burnout, and suddenly becomes less productive. A new government regulation forces casinos to change the minimum probability of winning a slot machine play. And so on. What does our temporal difference model do when confronted with a dramatic changepoint?
+
+## Exercise: Simulate changepoint
+
+Simulate a bandit that has a 40% probability of winning in the first 50 plays, and then changes to having a 5% probability of winning in the last 50 plays. As before, plot the estimated expected value on each trial. Run this a few times. What do you notice, and why is this happening?
+
+## Fixed learning rate
+
+Our TD learning equation is $V_t = V_{t-1} + \frac{1}{t} \delta$. You'll note that every reward prediction error has a fractional impact on the expected value estimate, specifically $\frac{1}{t}$. This reflects the idea that as time goes on, reward prediction errors should have a weaker and weaker impact on the expected value estimate. That's okay in a world where the reward structure is always the same, but not in a world where the reward structure changes.
+
+The simplest and most often-used modification to TD is to use a ***fixed learning rate*** denoted by the Greek letter alpha ($\alpha$). (Yes, your memory is correct. $\alpha$ had a completely different meaning in the risk/ambiguity modeling... the same Greek letters often mean something different depending on the kind of computational models you're using, and it's not uncommon even in the same "family" of models for different researchers to refer to the same idea using different Greek letters. Whew.)
+
+That change produces the "canonical" version of TD-learning that is most often used in reinforcement learning:
+
+$$
+V_t = V_{t-1} + \alpha \delta, \\
+\delta = r_t - V_{t-1}
+\tag{2.1.3}
+$$
+
+Because the learning rate is still fractional, $\alpha \in [0, 1]$. A learning rate of $\alpha=0$ means that the agent never uses reward prediction errors to update its value representation, and a learning rate of $\alpha = 1$ means that every reward prediction error wipes out the entire history of learned expected value.
+
+## Exercise: Simulate fixed learning rate
+
+1. Write a function for an agent that learns using TD with a fixed learning rate. This is useful enough to add to your `utils.R`, so do that now. Below is some starter code...
+
+```{r dummy-rl-td}
+#| eval = FALSE
+
+learn_rl_td <- function(learning_rate, reward, value_estimate) {
+  
+  # Fill in!
+  
+  return ( expected_value )
+}
+```
+
+2. As before, simulate a bandit that has a 40% probability of winning in the first 50 plays, and then changes to having a 5% probability of winning in the last 50 plays. Record the expected value on each trial using both the running-average agent (doesn't matter which one), and also the fixed-learning-rate TD agent with $\alpha = 0.2$. Plot the learned values on each trial as before. Try running this a few times. How do the running-average and fixed-learning-rate TD agents compare? Note the "wave-like" pattern that emerges. Why does this happen?
+
+3. Now try adjusting the value of $\alpha$. What happens as $\alpha$ approaches 0 and 1?
+
+# Simulating choice
+
+## Exercise: Stable two-armed bandit
+
+Let's now expand our simulations to a two-arm bandit task. On each trial, the agent can choose between the blue and orange slot machines. The agent doesn't know the probability of either paying out, and the agent doesn't know whether one is better than the other.
+
+As the slot machine designers, we know that the blue machine pays out 30% of the time, whereas the orange machine pays out 70% of the time.
+
+How can we model an agent's choices in this task? We can do so by computing the expected values of both machines on each trial, then using a softmax choice function to "decide" which machine to play.
+
+Below, let's write some code that simulates an agent's choices over 100 trials. This agent should have the learning rate $\alpha = 0.1$ and the softmax temperature $\tau = 1$.
+
+```{r sim-changepoint}
+agent_alpha <- 0.1
+agent_tau <- 1
+p_blue_payout <- 0.3
+p_orange_payout <- 0.7
+
+value_blue <- 0.5
+value_orange <- 0.5
+chose_blue <- 0
+bandit_outcomes <- 0
+
+for (t in 1:100) {
+  if (t == 1) {
+    bandit_values <- c(value_blue, value_orange)
+  } else {
+    bandit_values <- c(value_blue[t-1], value_orange[t-1])
+  }
+  
+  p_choose_blue <- softmax(
+    option_values = bandit_values,
+    option_chosen = 1,
+    temperature = agent_tau
+  )
+  
+  chose_blue[t] <- as.numeric(p_choose_blue >= runif(n = 1))
+  
+  if (chose_blue[t] == 1) {
+    bandit_outcomes[t] <- play_bandit(p_win = p_blue_payout, n_plays = 1)
+    value_blue[t] <- learn_rl_td(
+      learning_rate = agent_alpha,
+      reward = bandit_outcomes[t],
+      value_estimate = ifelse(t == 1, value_blue[t], value_blue[t-1])
+    )
+    value_orange[t] <- ifelse(t == 1, value_orange, value_orange[t-1])
+  } else {
+    bandit_outcomes[t] <- play_bandit(p_win = p_orange_payout, n_plays = 1)
+    value_orange[t] <- learn_rl_td(
+      learning_rate = agent_alpha,
+      reward = bandit_outcomes[t],
+      value_estimate = ifelse(t == 1, value_orange[t], value_orange[t-1])
+    )
+    value_blue[t] <- ifelse(t == 1, value_blue, value_blue[t-1])
+  }
+}
+
+tibble(
+  blue = value_blue,
+  orange = value_orange,
+) %>%
+  mutate(trial = row_number()) %>%
+  pivot_longer(cols = -trial) %>%
+  ggplot(aes(x=trial, y=value, color=name)) +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = c("blue", "orange"))
+```
+
+Your job is to turn this code into a function. With this function, simulate 9 "types" of agents by crossing $\alpha \in [0.1, 0.4, 0.8]$ and $\tau \in [0.5, 1, 2]$. For each type of agent, simulate 50 artificial "subjects" who are all taking the task. For each agent type, take the average of all agents' behavior on each trial, and then plot what the group-level learning curve looks like. This ultimately will look like a 3x3 grid of plots, one for each type of agent. What do you observe?
+
+## Exercise: Volatile two-armed bandit
+
+In this second exercise, modify the bandit task so that after every 20 trials, the "good" bandit switches color. For example, the blue machine might start paying off 30% of the time, but then switches over to paying off 70% of the time. With this function, simulate 300 agents' behavior just as before, with 100 agents for each of the three values of $\alpha$. Plot the group-level learning curves. What do you notice, compared to the stable two-armed bandit?
+
+# Next time...
+
+Here, we have discussed just a few of the modeling formalisms of reinforcement learning (glossing over many, many more), and have simulated behavior in a simple gambling task.
+
+Now that we know how to simulate learned value estimates and behavior, we can try our hand at fitting a reinforcement learning model to real data. That's what we'll cover next time.

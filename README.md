@@ -32,15 +32,14 @@ If you've already completed the `into-the-tidyverse` tutorial series for learnin
 
 ### Session 2: Reinforcement learning
 
-1. Expected value, again.
-2. Simulating trial-and-error learning in a changing world.
-3. Using data to fit reinforcement learning models.
+1. Expected value, again. Simulating trial-and-error learning.
+2. Using data to fit reinforcement learning models.
+3. Successor representations.
 
 ### Session 3: Regression from scratch
 
-1. Expected value, once more.
-2. Generalized linear models.
-3. Useful applications of regression-adjacent modeling.
+1. Expected value, once more. Generalized linear models.
+2. Useful applications of regression-adjacent modeling.
 
 ### Session 4: Drift diffusion modeling
 

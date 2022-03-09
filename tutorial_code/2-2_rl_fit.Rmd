@@ -1,0 +1,577 @@
+---
+title: "Reinforcement Learning: Model Fitting"
+subtitle: "Session 2-2"
+author: "Jae-Young Son"
+date: "March 8, 2022"
+output:
+  html_document:
+    code_download: true
+    code_folding: show
+    toc: true
+    toc_float:
+      collapsed: false
+---
+
+# Setup
+
+We'll load in our usual packages, and will also load in a new library, `tictoc`, which will help us get a sense for how long it takes to run compute-intensive processes.
+
+```{r load-libraries}
+library(tidyverse)
+suppressMessages(library(here))
+library(tictoc)
+```
+
+Along with our custom utility functions.
+
+```{r dummy-utils}
+#| eval = FALSE
+
+source(here("code", "utils.R"))
+```
+
+```{r real-utils}
+#| echo = FALSE
+
+source(here("tutorial_code", "utils.R"))
+```
+
+Finally, we'll load real data that we'll use to fit some reinforcement learning models. These data are from a [2015 workshop](https://hannekedenouden.ruhosting.nl/RLtutorial/Instructions.html) taught by Hanneke den Ouden and Jill O'Reilly, and I've done a bit of preprocessing to convert the original data (saved in a Matlab-proprietary format) into a CSV.
+
+Note that in the original data, choice is encoded as "1" and "2". For descriptive purposes, I've arbitrarily relabeled these as "blue" and "orange" even though the true slot machine colors were likely randomized across participants.
+
+```{r load-data}
+behav <- here("data", "rl_bandit.csv") %>%
+  read_csv(show_col_types = FALSE)
+```
+
+# Task description
+
+Below, I have directly copy-and-pasted information about the task from the same website where I sourced the data.
+
+> You have just completed 135 trials of a reversal learning task. In
+> this task, 2 slot machines were presented on every trial, each
+> associated with a certain probability of reward.
+>
+> Although you were not told this, the payout probabilities for the blue
+> and orange machines were coupled. There was always one ''good'' option
+> and one ''bad'' option. The probability of reward when you picked the
+> high reward machine was always 70%. The probability of reward when you
+> picked the low reward machine was only 30%.
+>
+> At various points during the task we reversed the identity of the high
+> and low reward machine. Subjects have to continuously keep track which
+> machine was currently best.
+>
+> As a crucial manipulation, there were 2 versions of the task. One
+> version in which the reward probability changed quickly, every 10-20
+> trials. One version where they changed slowly, every 25-35 trials.
+>
+> Your subject number determined which version of the task you played.
+> Odd subject numbers were assigned the high volatility (volatile)
+> condition. Even subject numbers the low volatility (stable) condition.
+
+# Model-fitting pipeline
+
+Let's review the steps we took last time. Happily, we'll be able to reuse much of the same code, and there aren't too many formalisms that are totally new to us.
+
+## Model
+
+First and foremost, we needed a model of how the observable task variables (amount of money at stake, amount of risk/ambiguity present in the gamble) could be used to estimate an agent's utility, given a set of latent variables (risk and ambiguity preferences). Our utility model was defined as the following:
+
+$$U(\alpha, \beta; v, p, A) = v^\alpha \times (p + \frac{\beta A}{2})$$
+
+For reinforcement learning, we need a model that can translate an observable task variable (reward) to estimate an agent's value (akin to utility), given a latent variable (learning rate). Last time, we defined an equation that would allow us to do this. We already have this in our `utils.R` file, so we're good to go.
+
+$$
+V_t = V_{t-1} + \alpha \delta, \\
+\delta = r_t - V_{t-1}
+$$
+
+## Likelihood
+
+Next, we needed a likelihood function that tells us how likely it is that a subject behaved the way they did, given the estimated parameter values under consideration. For binary choice tasks, the likelihood was defined as:
+
+$$P(y_i | p_{\theta}) =( p_{\theta})^{y_i} (1 - p_{\theta})^{1-y_i}$$
+
+which could alternatively be written as:
+
+$$
+P(y_i | p_{\theta}) = 
+\begin{cases}
+p_{\theta} & \text{if } y_i = 1 \\
+1 - p_{\theta} & \text{if } y_i = 0
+\end{cases}
+$$
+
+and implemented in code as something like:
+
+```{r example-likelihood}
+#| eval = FALSE
+
+likelihood = if_else(
+  condition = choice == 1,
+  true = p_choose_yes,
+  false = 1 - p_choose_yes
+)
+```
+
+Since our data come from a binary-choice gambling task, we can reuse this likelihood function wholesale.
+
+## Objective function
+
+We then needed to write an objective function that would summarize the model and likelihood as a single number for the optimizer to minimize: the negative log-likelihood.
+
+Last time, we wrote some code that simulated how an agent would behave, given the learning rate $\alpha$ and the softmax temperature $\tau$. The predicted probability of choosing a particular slot machine (from the softmax) can be used to compute a likelihood, and then that likelihood can be used to compute the negative log-likelihood.
+
+We'll now take some time to adapt that code into an objective function named `obj_fun_draft1`. As the name suggests, we're going to be refining this function over a few iterations. The first argument should be `param_guesses`, a vector of values that gets unpacked in the script as the variables `alpha` and `tau` (if this sounds cryptic, try reviewing your notes from session 1.3). The second argument should be `learning_data`, a dataframe that contains the columns `choice` and `outcome`.
+
+I've provided my code below, but you'll have to unfold the code block to see it. Try your best to code your own objective function first, as this will help you practice developing your intuitions and skills. When you're done, compare your function against mine. Since we'll be modifying this objective function in future drafts, we'll ultimately be using my version to make sure we're on the same page.
+
+```{r obj-fun-draft1}
+#| class.source = 'fold-hide'
+
+obj_fun_draft1 <- function(param_guesses, learning_data) {
+  # Initialize values
+  value_blue <- 0.5
+  value_orange <- 0.5
+  likelihood <- NA_real_
+  
+  # Unpack parameters
+  alpha <- param_guesses[1]
+  tau <- param_guesses[2]
+  
+  # Unpack data
+  n_trials <- nrow(learning_data)
+  choices <- learning_data$choice
+  rewards <- learning_data$outcome
+  
+  for (t in 1:n_trials) {
+    # What's the probability of the agent picking the blue machine?
+    p_choose_blue <- softmax(
+      option_values = c(value_blue, value_orange),
+      option_chosen = 1,
+      temperature = tau
+    )
+    
+    if (choices[t] == "blue") {
+      # Use agent's actual choice to update value estimates
+      value_blue <- learn_rl_td(
+        learning_rate = alpha,
+        reward = rewards[t],
+        value_estimate = value_blue
+      )
+      # Compute likelihood of agent having chosen this, given params
+      likelihood[t] <- p_choose_blue
+    } else {
+      value_orange <- learn_rl_td(
+        learning_rate = alpha,
+        reward = rewards[t],
+        value_estimate = value_orange
+      )
+      likelihood[t] <- 1 - p_choose_blue
+    }
+  }
+  
+  # Return sum of negative log-likelihood
+  return ( sum(neg_loglik_logistic(likelihood)) )
+}
+```
+
+## Optimizer
+
+All that's left now is to run the optimizer! Below, we'll just try it out on one sample subject.
+
+```{r demo-optim-barebones}
+optim(
+  par = c(0.2, 1),
+  fn = obj_fun_draft1,
+  learning_data = behav %>% filter(sub_id == 1),
+  control = list(maxit = 1000)
+)
+```
+
+We know from how we set up the objective function that the first value of `$par` is the estimated value of $\alpha$, and the second value is $\tau$. At face value, what do these results suggest about subject 1?
+
+
+# Bounded parameters
+
+At this point, you have a good handle on basic optimization and how it can be used for computational modeling. However, there are some additional modifications we could make to our modeling pipeline that would make it more robust and easier to work with. We'll cover these now.
+
+Let's try running the optimizer on subject 2. We can see two worrying signs that something funky might be happening. First, we can see that at least 50 warnings were generated in the course of running our objective function. Second, we can see that the parameter values are very close to 0.
+
+```{r optim-sub-2-fail}
+#| warning = FALSE
+
+optim(
+  par = c(0.2, 1),
+  fn = obj_fun_draft1,
+  learning_data = behav %>% filter(sub_id == 2),
+  control = list(maxit = 1000)
+)
+```
+
+Behind the scenes, what you didn't see is that I actually had to go back and edit the `neg_loglik_logistic` function, because it originally kept returning errors that crashed the optimizer. What was revealing about those errors is that they were caused by the optimizer guessing that $\alpha = -0.2$. (NB: at the time of writing, nobody's forked these tutorials, so from your point of view, we're continuing to use the same NLL function that we've always been using.)
+
+In this case, we know that the learning rate $\alpha \in [0, 1]$. However, the optimizer will consider any real-valued parameter value, including values outside of that range. How, then, can we get parameters to be "well-behaved" within a theoretically-defined range?
+
+## Logistic transforms
+
+The simplest solution is to use some sort of mathematical transformation. In the common scenario where we want numbers to live inside the range $(0, 1]$, we can use a logistic transform. The equation for a "standard" logistic function is:
+
+$$ f(x) = \frac{1}{1 + e^{-x}} \tag{2.2.1} $$
+
+This can be implemented in code as the following, which you should add to `utils.R`.
+
+```{r def-logistic-standard}
+logistic_standard <- function(x) {
+  return ( 1 / (1 + exp(-x)) )
+}
+```
+
+As a quick exercise: try generating a sequence of numbers from -100 to +100, feed that to our new logistic function, and then plot the results.
+
+We won't be using it now, but there's also a general form of the logistic equation that allows you to specify whatever upper and lower bounds you want. When the lower bound $L = 0$ and the upper bound $U = 1$, you'll note that this simplifies to the "standard" logistic equation in 2.2.1. For me, seeing the general equation helps build an intuition for what the standard equation is doing.
+
+$$ g(x; L,U) = L + \frac{U - L}{1 + e^{-x}} \tag{2.2.2} $$
+
+Go ahead and add this general equation to your `utils.R`.
+
+```{r def-logistic-generalized}
+logistic_general <- function(x, lower_bound=0, upper_bound=1) {
+  lower_bound + (upper_bound - lower_bound) / (1 + exp(-x))
+}
+```
+
+## Modifying objective function
+
+So if we now have a method for bounding any number $x \in (-\infty, +\infty]$ into the range $(0, 1]$, then we can simply apply this transform to the raw parameter value provided by the optimizer. This requires us to modify our objective function a little bit, so we're now on draft2. See if you can make this change yourself, before looking at my code below.
+
+```{r obj-fun-draft2}
+#| class.source = 'fold-hide'
+
+obj_fun_draft2 <- function(param_guesses, learning_data) {
+  # Initialize values
+  value_blue <- 0.5
+  value_orange <- 0.5
+  likelihood <- NA_real_
+  
+  # Unpack parameters
+  alpha <- logistic_standard(param_guesses[1]) # Bound to (0, 1]
+  tau <- param_guesses[2]
+  
+  # Unpack data
+  n_trials <- nrow(learning_data)
+  choices <- learning_data$choice
+  rewards <- learning_data$outcome
+  
+  for (t in 1:n_trials) {
+    # What's the probability of the agent picking the blue machine?
+    p_choose_blue <- softmax(
+      option_values = c(value_blue, value_orange),
+      option_chosen = 1,
+      temperature = tau
+    )
+    
+    if (choices[t] == "blue") {
+      # Use agent's actual choice to update value estimates
+      value_blue <- learn_rl_td(
+        learning_rate = alpha,
+        reward = rewards[t],
+        value_estimate = value_blue
+      )
+      # Compute likelihood of agent having chosen this, given params
+      likelihood[t] <- p_choose_blue
+    } else {
+      value_orange <- learn_rl_td(
+        learning_rate = alpha,
+        reward = rewards[t],
+        value_estimate = value_orange
+      )
+      likelihood[t] <- 1 - p_choose_blue
+    }
+  }
+  
+  # Return sum of negative log-likelihood
+  return ( sum(neg_loglik_logistic(likelihood)) )
+}
+```
+
+## Optimizing with bounded parameters
+
+Now that we've made this change, let's rerun the optimizer with the new objective function on subject 2.
+
+```{r optim-sub-2-good}
+optim(
+  par = c(0.2, 1),
+  fn = obj_fun_draft2,
+  learning_data = behav %>% filter(sub_id == 2),
+  control = list(maxit = 1000)
+)
+```
+
+No warning messages this time! Note that both parameter values have also now changed. This is because every parameter value is implicitly *conditional* on every other parameter value in the model. If you have even one "misbehaving" parameter, it can mess up your estimates for the remaining parameters.
+
+To properly interpret the value of $\alpha$, we have to apply a logistic transformation to the estimated value, just like what we did in our objective function.
+
+```{r demo-logistic-alpha}
+(
+  optim(
+    par = c(0.2, 1),
+    fn = obj_fun_draft2,
+    learning_data = behav %>% filter(sub_id == 2),
+    control = list(maxit = 1000)
+  )$par[1]
+) %>%
+  logistic_standard()
+```
+
+This seems like a much more reasonable value of $\alpha$, and the new estimate of $\tau$ also seems more like what we'd expect too.
+
+# Tidy optimizing
+
+By default, the raw `optim` output is a named list. In practice, I find this is a cumbersome format to work with. Personally, I love working with tidy dataframes, and so I always convert my `optim` output into a tibble. Here's an example below that illustrates why it can be convenient to work with dataframes. No need yet to add this to your `utils.R` file.
+
+```{r demo-tidy-output}
+optim_to_tibble <- function(optim_output, param_names) {
+  tibble(
+    parameter = param_names,
+    value = optim_output$par
+  ) %>%
+    mutate(
+      neg_loglik = optim_output$value,
+      convergence = case_when(
+        optim_output$convergence == 0 ~ "converged",
+        optim_output$convergence == 1 ~ "maxit reached",
+        optim_output$convergence == 10 ~ "simplex degeneracy",
+        TRUE ~ "unknown problem"
+      )
+    )
+}
+
+test_optim <- optim(
+  par = c(0.2, 1),
+  fn = obj_fun_draft2,
+  learning_data = behav %>% filter(sub_id == 1),
+  control = list(maxit = 1000)
+)
+
+optim_to_tibble(
+  optim_output = test_optim,
+  param_names = c("alpha", "tau")
+) %>%
+  # Apply logistic transform to get alpha back in (0, 1]
+  mutate(
+    value = if_else(parameter == "alpha", logistic_standard(value), value),
+    sub_id = 1
+  )
+```
+
+We can take this one step further and write a little wrapper around `optim` that makes it easier to understand what all the arguments are, and that returns a tidy tibble. Go ahead and add `run_optim` to your `utils.R`. Note that `optim_to_tibble` is actually implemented as an internal function, so that it's only ever available inside `run_optim`.
+
+```{r def-run-optim}
+run_optim <- function(max_iter_per_run, objective_function,
+                      param_guesses, ...) {
+  ### Note: I write my objective functions so that `param_names` is a required
+  #   named argument. This presents a bit of a headache because I also want to
+  #   use the parameter names as an argument for `optim_to_tibble`. So the
+  #   unholy compromise is for the user to treat param_names as a named argument
+  #   for `run_optim` when in fact it is not formally.
+  
+  optim_to_tibble <- function(optim_output, param_names) {
+    tibble(
+      parameter = param_names,
+      value = optim_output$par
+    ) %>%
+      mutate(
+        neg_loglik = optim_output$value,
+        convergence = case_when(
+          optim_output$convergence == 0 ~ "converged",
+          optim_output$convergence == 1 ~ "maxit reached",
+          optim_output$convergence == 10 ~ "simplex degeneracy",
+          TRUE ~ "unknown problem"
+        )
+      )
+  }
+  
+  param_names_copy <- list(...)$param_names
+  
+  return (
+    optim(
+      par = param_guesses,
+      fn = objective_function,
+      # Usually, ... contains the data argument(s) for the objective function
+      ... = ...,
+      control = list(maxit = max_iter_per_run)
+    ) %>%
+      optim_to_tibble(param_names_copy)
+  )
+}
+```
+
+## Modifying objective function
+
+Note that we'll have to write a third draft of our objective function, so that it takes another argument for `param_names`. There's an automatic technique for creating new variables according to the names passed in through `param_names`, which you can see has been implemented below. This ends up being really useful, as it ensures that your parameters are always being unpacked in a consistent manner, and with minimal possibility for error.
+
+```{r def-tidy-obj-fun}
+obj_fun_draft3 <- function(param_guesses, param_names, learning_data) {
+  # Initialize values
+  value_blue <- 0.5
+  value_orange <- 0.5
+  likelihood <- NA_real_
+  
+  # Assign variable names/values automatically
+  for (j in 1:length(param_names)) {
+    assign(param_names[j], param_guesses[j])
+  }
+  
+  # Bound to (0, 1]
+  alpha <- logistic_standard(alpha)
+  
+  # Unpack data
+  n_trials <- nrow(learning_data)
+  choices <- learning_data$choice
+  rewards <- learning_data$outcome
+  
+  for (t in 1:n_trials) {
+    # What's the probability of the agent picking the blue machine?
+    p_choose_blue <- softmax(
+      option_values = c(value_blue, value_orange),
+      option_chosen = 1,
+      temperature = tau
+    )
+    
+    if (choices[t] == "blue") {
+      # Use agent's actual choice to update value estimates
+      value_blue <- learn_rl_td(
+        learning_rate = alpha,
+        reward = rewards[t],
+        value_estimate = value_blue
+      )
+      # Compute likelihood of agent having chosen this, given params
+      likelihood[t] <- p_choose_blue
+    } else {
+      value_orange <- learn_rl_td(
+        learning_rate = alpha,
+        reward = rewards[t],
+        value_estimate = value_orange
+      )
+      likelihood[t] <- 1 - p_choose_blue
+    }
+  }
+  
+  # Return sum of negative log-likelihood
+  return ( sum(neg_loglik_logistic(likelihood)) )
+}
+```
+
+## Optimizing made easy
+
+And now we can put the whole thing together. For me, this is a much nicer interface for accessing / getting data from the optimizer.
+
+```{r demo-tidy-optim}
+run_optim(
+  max_iter_per_run = 1000,
+  objective_function = obj_fun_draft3,
+  # Supply random initial guesses in range [0, 1]
+  param_guesses = runif(2),
+  # Define what parameters are taken by the objective function
+  param_names = c("alpha", "tau"),
+  # Define what data is taken by the objective function
+  learning_data = behav %>% filter(sub_id == 1)
+) %>%
+  # Apply logistic transform to get alpha back in (0, 1]
+  mutate(
+    value = if_else(parameter == "alpha", logistic_standard(value), value)
+  )
+```
+
+# Scaling up
+
+Remember from last time that for each subject, we typically want to run each optimizer a few times with random starting guesses, to make sure that our parameter estimates aren't simply reflecting whatever guesses we originally provided. At the same time, we also typically want to get model fits for many subjects.
+
+Thanks to our tidy optimization routine, it becomes very straightforward to solve both of these problems. Try your hand at writing some code that loops over subjects 1-5. For each subject, the optimizer should try estimating parameters 5 times with random starting guesses each time (e.g., use `runif`). As before, on each run, the optimizer should give up after 1,000 iterations.
+
+You might find yourself in the unlucky position of having randomly chosen a really bad starting guess on the first iteration of an optimizer run. Usually, this returns an error that will stop the entire optimization routine. Most annoyingly, such an error will stop a `for` loop from progressing. To guard against this possibility, look up how to use `try` to "trap" errors and prevent them from derailing the rest of your procedure.
+
+Below, you can find my implementation in the hidden code block. Note that the calls to `tictoc` are just for our own knowledge, in case we want to know how long it'd take to estimate parameters for more subjects / more optimizer runs.
+
+Once you're sure that your code works as expected, go ahead and estimate parameters for all of the subjects in the dataset.
+
+```{r est-params}
+#| class.source = 'fold-hide',
+#| warning = FALSE
+
+# Estimate parameters for these subjects
+# these_subjects <- unique(behav$sub_id)
+these_subjects <- 1:5
+
+# Note: In published work, I typically run the optimizer no fewer than 25 times
+#   per subject. For the sake of time, let's just do this a few times for
+#   demonstration purposes.
+this_many_runs <- 5
+
+# Give up after this many iterations
+this_many_iter_per_run <- 1000
+
+# What parameters are we estimating?
+these_params <- c("alpha", "tau")
+
+tic("Total model-fitting time")
+for (this_subject in these_subjects) {
+  tic(str_c("Subject ", this_subject, " finished"))
+  
+  for (this_run in 1:this_many_runs) {
+    
+    try({
+      run_output <- run_optim(
+        max_iter_per_run = this_many_iter_per_run,
+        objective_function = obj_fun_draft3,
+        # Supply random initial guesses in range [0, 1]
+        param_guesses = runif(length(these_params)),
+        # Define what parameters are taken by the objective function
+        param_names = these_params,
+        # Define what data is taken by the objective function
+        learning_data = behav %>% filter(sub_id == this_subject)
+      ) %>% mutate(
+        sub_id = this_subject,
+        optimizer_run = this_run
+      )
+      
+      if (this_subject == 1 & this_run == 1) {
+        output <- run_output
+      } else {
+        output <- bind_rows(output, run_output)
+      }
+    })
+  }
+  
+  toc()
+}
+toc()
+```
+
+# *Maximum* maximum likelihood
+
+The logic of maximum likelihood is that, well, we evaluate the parameter values that best maximize the likelihood. This is the purpose of running the optimizer many times. When we have many optimizer runs, we want to extract only the run that produced the best model fit. We can define a function for doing this automatically. See if you can explain why each line of code exists, and then add this to your `utils.R`.
+
+```{r def-best-optim-run}
+best_optim_run <- function(optim_output) {
+  
+  best_params <- optim_output %>%
+    filter(convergence == "converged") %>%
+    filter(neg_loglik == min(neg_loglik)) %>%
+    filter(optimizer_run == min(optimizer_run))
+  
+  return( best_params )
+}
+```
+
+# Exercise: Basic hypothesis testing
+
+Subjects in this study completed a version of the task containing either low- or high-volatility bandits. Subjects with odd-numbered IDs were in the high-volatility condition, and subjects with even-numbered IDs were in the low-volatility condition.
+
+Knowing this, what hypothesis might you have about the (average) model parameters we'd expect to see in each condition?
+
+Try plotting the data to get a visual sense for whether the hypothesis is supported, and then try running a statistical test. What do you conclude based on this analysis?
+
