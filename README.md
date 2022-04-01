@@ -6,7 +6,7 @@ This tutorial series is mostly written in R, with the exception of the DDM tutor
 
 For details on how to install software and download the tutorials, [click here](https://jaeyoungson.com/tutorials.html).
 
-If you've already completed the `into-the-tidyverse` tutorial series for learning R/tidyverse, then this should already be familiar to you. It is assumed in this series that you have a working knowledge of R/tidyverse.
+If you've already completed the [`into-the-tidyverse`](https://github.com/psychNerdJae/into-the-tidyverse) tutorial series for learning R/tidyverse, then this should already be familiar to you. It is assumed in this series that you have a working knowledge of R/tidyverse.
 
 
 ## File and folder structure
