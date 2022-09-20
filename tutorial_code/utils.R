@@ -91,11 +91,11 @@ run_optim <- function(max_iter_per_run, objective_function,
   
   optim_to_tibble <- function(optim_output, param_names) {
     tibble(
-      parameter = param_names,
-      value = optim_output$par
+      param_name = param_names,
+      param_value = optim_output$par
     ) %>%
       mutate(
-        neg_loglik = optim_output$value,
+        optim_value = optim_output$value,
         convergence = case_when(
           optim_output$convergence == 0 ~ "converged",
           optim_output$convergence == 1 ~ "maxit reached",
@@ -117,4 +117,24 @@ run_optim <- function(max_iter_per_run, objective_function,
     ) %>%
       optim_to_tibble(param_names_copy)
   )
+}
+
+best_optim_run <- function(optim_output, return_as = c("dataframe", "vector")) {
+  
+  if (length(return_as) > 1) {
+    stop("Define `return_as`.")
+  } else if (!return_as %in% c("dataframe", "vector")) {
+    stop("The argument `return_as` must either be `dataframe` or `vector`")
+  }
+  
+  best_params <- optim_output %>%
+    filter(convergence == "converged") %>%
+    filter(optim_value == min(optim_value)) %>%
+    filter(optimizer_run == min(optimizer_run))
+  
+  if (return_as == "vector") {
+    return( best_params %>% select(parameter, value) %>% deframe() )
+  } else {
+    return( best_params )
+  }
 }
